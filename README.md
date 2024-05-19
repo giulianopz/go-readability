@@ -1,13 +1,13 @@
 # go-readability
 
-A Go port of Mozilla [Readability.js](https://github.com/mozilla/readability), an algorithm based on heuristics (e.g. link density, text similarity, number of images, etc.) that [just somehow work well](https://stackoverflow.com/a/4240037) which powers the [Firefox Reader View](https://support.mozilla.org/kb/firefox-reader-view-clutter-free-web-pages) offering a distraction-free reading experience for articles, blog posts, and other text-heavy web pages by removing ads, GDPR-compliant cookie banners and other unsolicited junk.
+A Go port of Mozilla [Readability.js](https://github.com/mozilla/readability), an algorithm based on heuristics (e.g. link density, text similarity, number of images, etc.) that [just somehow work well](https://stackoverflow.com/a/4240037) and powers the [Firefox Reader View](https://support.mozilla.org/kb/firefox-reader-view-clutter-free-web-pages) offering a distraction-free reading experience for articles, blog posts, and other text-heavy web pages by removing ads, GDPR-compliant cookie banners and other unsolicited junk.
 
-This port uses only the minimal DOM parser bundled with the original lib, without resorting to the Go stdlib (`net/html`). The rest of the source code is aligned with the latest commit ([97db40b](https://github.com/mozilla/readability/commit/97db40ba035a2de5e42d1ac7437893cf0da31d76)) on the main branch.
+This port uses only the minimal DOM parser bundled with the original lib, without resorting to the Go stdlib (`net/html`). The source code is aligned with the latest commit ([97db40b](https://github.com/mozilla/readability/commit/97db40ba035a2de5e42d1ac7437893cf0da31d76)) on the main branch.
 
 
 ## A Bit of History
 
-Readability.js maintained by Mozilla is based on a JavaScript [bookmarklet](https://en.wikipedia.org/wiki/Bookmarklet) developed by Arc90, a consulting firm which was experimenting with Web techonlogy at that time and which used to share some of their stuff as open source software. The company site has long disappeared but it can still be found with the [Wayback Machine](https://web.archive.org/web/20091225055930/http://lab.arc90.com//2009//03//02//readability//).
+Readability.js maintained by Mozilla is based on a JavaScript [bookmarklet](https://en.wikipedia.org/wiki/Bookmarklet) developed by Arc90, a consulting firm which was experimenting with Web technology at that time and which used to share some of their stuff as open source software. The company site has long disappeared but it can still be found with the [Wayback Machine](https://web.archive.org/web/20091225055930/http://lab.arc90.com//2009//03//02//readability//).
 
 The source code was released in 2009 under the Apache 2.0 software license on [Google Code](https://code.google.com/archive/p/arc90labs-readability/) before being abandoned in 2010 to be repackaged as a web service called [Readability.com](https://en.wikipedia.org/wiki/Readability_(service)), then discontinued in 2016. The main source code contributor was Chris Dary ([@umbrae](http://www.umbrae.net/)). 
 
