@@ -2,7 +2,7 @@
 
 A Go port of Mozilla [Readability.js](https://github.com/mozilla/readability), an algorithm based on heuristics (e.g. link density, text similarity, number of images, etc.) that [just somehow work well](https://stackoverflow.com/a/4240037) and powers the [Firefox Reader View](https://support.mozilla.org/kb/firefox-reader-view-clutter-free-web-pages) offering a distraction-free reading experience for articles, blog posts, and other text-heavy web pages by removing ads, GDPR-compliant cookie banners and other unsolicited junk.
 
-This port uses only the minimal DOM parser bundled with the original lib, without resorting to the Go stdlib (`net/html`). The source code is aligned with the latest commit ([97db40b](https://github.com/mozilla/readability/commit/97db40ba035a2de5e42d1ac7437893cf0da31d76)) on the main branch.
+This port uses only the minimal DOM parser bundled with the original lib, resorting to the Go stdlib (`net/html`) in case of a failure. The source code is aligned with the latest commit ([97db40b](https://github.com/mozilla/readability/commit/97db40ba035a2de5e42d1ac7437893cf0da31d76)) on the main branch.
 
 
 ## A Bit of History

@@ -7,6 +7,11 @@ import (
 	"golang.org/x/net/html"
 )
 
+const (
+	stdlibParser = iota
+	minimalDomParser
+)
+
 type Options struct {
 	logLevel          slog.Level
 	maxElemsToParse   int
@@ -20,6 +25,7 @@ type Options struct {
 	minContentLength  int
 	minScore          float64
 	visibilityChecker func(*html.Node) bool
+	parser            uint
 }
 
 type Option func(*Options)
@@ -38,6 +44,7 @@ func defaultOpts() *Options {
 		minScore:          20,
 		minContentLength:  140,
 		visibilityChecker: isNodeVisible,
+		parser:            minimalDomParser,
 	}
 }
 
@@ -100,13 +107,27 @@ func MinContentLength(len int) Option {
 		o.minContentLength = len
 	}
 }
+
 func MinScore(score float64) Option {
 	return func(o *Options) {
 		o.minScore = score
 	}
 }
+
 func VisibilityChecker(f func(*html.Node) bool) Option {
 	return func(o *Options) {
 		o.visibilityChecker = f
+	}
+}
+
+func MinimalDomParser() Option {
+	return func(o *Options) {
+		o.parser = minimalDomParser
+	}
+}
+
+func StdlibHtmlParser() Option {
+	return func(o *Options) {
+		o.parser = stdlibParser
 	}
 }

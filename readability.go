@@ -33,6 +33,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/html"
 )
 
 const (
@@ -138,7 +140,18 @@ func New(htmlSource, uri string, opts ...Option) (*Readability, error) {
 		opt(r.options)
 	}
 
-	r.doc = newDOMParser(LogLevel(r.options.logLevel)).parse(htmlSource, uri)
+	if r.options.parser == minimalDomParser {
+		r.doc = newDOMParser(LogLevel(r.options.logLevel)).parse(htmlSource, uri)
+	}
+
+	minDomParserFailed := r.doc != nil && r.doc.Body == nil
+	if r.options.parser == stdlibParser || minDomParserFailed {
+		doc, err := html.Parse(strings.NewReader(htmlSource))
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse html source with stdlib parser: %w", err)
+		}
+		r.doc = mapDoc(doc, uri)
+	}
 
 	r.logger = loggerWith(r.options.logLevel)
 
