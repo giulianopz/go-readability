@@ -28,6 +28,7 @@
 package readability
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -35,9 +36,9 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
-)
 
-const null = '\x00'
+	"golang.org/x/net/html"
+)
 
 // XML only defines these and the numeric ones:
 
@@ -998,12 +999,11 @@ func (n *node) getTextContent() string {
 }
 
 type domParser struct {
-	currentChar int
-	errorState  string
-	html        string
-	doc         *node
-	logger      *slog.Logger
-	options     *Options
+	html    string
+	z       *html.Tokenizer
+	doc     *node
+	logger  *slog.Logger
+	options *Options
 }
 
 func newDOMParser(opts ...Option) *domParser {
@@ -1019,74 +1019,58 @@ func newDOMParser(opts ...Option) *domParser {
 	return p
 }
 
-// Look at the next character without advancing the index.
-func (p *domParser) peekNext() (rune, int) {
-	if p.currentChar >= len(p.html) {
-		return null, 0
-	}
-	char, width := utf8.DecodeRuneInString(p.html[p.currentChar:])
-	if char == utf8.RuneError && width == 0 {
-		p.logger.Error("next char is empty", "current_pos", p.currentChar)
-		return null, 0
-	}
-	if char == utf8.RuneError && width == 1 {
-		p.logger.Error("next char is utf8-invalid", "current_pos", p.currentChar)
-		return null, 0
-	}
-	return char, width
-}
-
-// Get the next character and advance the index.
-func (p *domParser) nextChar() rune {
-	char, width := p.peekNext()
-	p.currentChar += width
-	return char
-}
-
-// Called after a quote character is read. This finds the next quote
-// character and returns the text string in between.
-func (p *domParser) readString(quote string) string {
-	var str string
-	var n = indexOfFrom(p.html, quote, p.currentChar)
-	if n == -1 {
-		p.currentChar = len(p.html)
-	} else {
-		str = substring(p.html, p.currentChar, n)
-		p.currentChar = n + 1
-	}
-	return str
-}
-
 // Called when parsing a node. This finds the next name/value attribute
 // pair and adds the result to the attributes list.
-func (p *domParser) readAttribute(n *node) {
-	var name string
-	num := indexOfFrom(p.html, "=", p.currentChar)
-	if num == -1 {
-		p.currentChar = len(p.html)
-	} else {
+func (p *domParser) readAttributes(n *node, raw []byte) {
+
+	tagIdx := bytes.IndexAny(raw, n.LocalName)
+	chars := raw[tagIdx+len(n.LocalName):]
+
+	for i := 0; i < len(chars); i++ {
+		c := chars[i]
+		if c == '/' || c == '>' {
+			break
+		}
+		if slices.Contains(whitespaces, rune(c)) {
+			continue
+		}
+
 		// Read until a '=' character is hit; this will be the attribute key
-		name = substring(p.html, p.currentChar, num)
-		p.currentChar = num + 1
-	}
+		idx := bytes.IndexAny(chars[i:], "=")
+		if idx == -1 {
+			// No attributes
+			break
+		}
+		equalsSign := idx + i
 
-	if name == "" {
-		return
-	}
-	// After a '=', we should see a '"' for the attribute value
-	var c = p.nextChar()
-	if c != '"' && c != '\'' {
-		p.logger.Error("Error reading attribute " + name + ", expecting '\"'")
-		return
-	}
-	// Read the attribute value (and consume the matching quote)
-	var value = p.readString(string(c))
+		key := string(chars[i:equalsSign])
+		if key == "" {
+			break
+		}
 
-	decoded, err := decodeHTML(value)
-	if err != nil {
-		p.logger.Error(err.Error())
-	} else {
-		n.Attributes = append(n.Attributes, newAttribute(name, decoded))
+		// After a '=', we should see a '"' for the attribute value
+		i += len(key) + 1
+		c = chars[i]
+		if c != '"' && c != '\'' {
+			p.logger.Error("Error reading attribute " + key + ", expecting '\"'")
+			break
+		}
+		// Read the attribute val (and consume the matching quote)
+		i++
+		idx2 := bytes.IndexByte(chars[i:], c)
+		if idx2 == -1 {
+			// No quote
+			break
+		}
+		closingQuote := idx2 + i
+		val := chars[i:closingQuote]
+		decoded, err := decodeHTML(string(val))
+		if err != nil {
+			p.logger.Error(err.Error())
+		} else {
+			n.Attributes = append(n.Attributes, newAttribute(key, decoded))
+		}
+		i += len(val) + 1
 	}
 }
 
@@ -1094,201 +1078,113 @@ func (p *domParser) readAttribute(n *node) {
 // read.
 // Returns an array; the first index of the array is the parsed node;
 // the second index is a boolean indicating whether this is a void Element
-func (p *domParser) makeElementNode() (*node, bool) {
+func (p *domParser) makeElementNode() *node {
 
-	var c = p.nextChar()
-	// Read the Element tag name
-	var strBuf []rune
-	strBuf = []rune{}
-	for !slices.Contains(whitespaces, c) && c != '>' && c != '/' {
-		if c == null {
-			return nil, false
-		}
-		strBuf = append(strBuf, c)
-		c = p.nextChar()
-	}
-	var tag = string(strBuf)
+	token := p.z.Token()
+
+	var tag = token.Data
 	if tag == "" {
-		return nil, false
+		return nil
 	}
 
 	var node = newElement(tag)
-	// Read Element attributes
-	for c != '/' && c != '>' {
-		if c == null {
-			return nil, false
-		}
 
-		c = p.nextChar()
-		for slices.Contains(whitespaces, c) {
-			// Advance cursor to first non-whitespace char.
-			c = p.nextChar()
-		}
-		if c != '/' && c != '>' {
-			p.currentChar -= len(string(c))
-			p.readAttribute(node)
-		}
-	}
-
-	// If this is a self-closing tag, read '/>'
-	var closed bool
-	if c == '/' {
-		closed = true
-		c = p.nextChar()
-		if c != '>' {
-			p.logger.Error("expected '>' to close " + tag)
-			return nil, false
-		}
-	}
-
-	return node, closed
-}
-
-// If the current input matches this string, advance the input index;
-// otherwise, do nothing. Returns whether input matched string
-func (p *domParser) match(str string) bool {
-	var strlen = len(str)
-	if strings.EqualFold(substring(p.html, p.currentChar, p.currentChar+strlen), str) {
-		p.currentChar += strlen
-		return true
-	}
-	return false
-}
-
-// Searches the input until a string is found and discards all input up to
-// and including the matched string.
-func (p *domParser) discardTo(str string) {
-	var index = indexOfFrom(p.html, str, p.currentChar) + len(str)
-	if index == -1 {
-		p.currentChar = len(p.html)
-	}
-	p.currentChar = index
-}
-
-// Reads child nodes for the given node.
-func (p *domParser) readChildren(n *node) {
-	var child = p.readNode()
-	for child != nil {
-		// Don't keep Comment nodes
-		if child.NodeType != 8 {
-			n.appendChild(child)
-		}
-		child = p.readNode()
-	}
-}
-
-func (p *domParser) discardNextComment() *node {
-	if p.match("--") {
-		p.discardTo("-->")
-	} else {
-		var c = p.nextChar()
-		for c != '>' {
-			if c == null {
-				return nil
-			}
-			if c == '"' || c == '\'' {
-				p.readString(string(c))
-			}
-			c = p.nextChar()
-		}
-	}
-	return newComment()
-}
-
-// Reads the next child node from the input. If we're reading a closing
-// tag, or if we've reached the end of input, return null. Returns the node
-func (p *domParser) readNode() *node {
-	var c = p.nextChar()
-	if c == null {
-		return nil
-	}
-	p.logger.Info("p.Readnode", "currentChar", string(c), "at", p.currentChar)
-	// Read any text as Text node
-	var textNode *node
-	if c != '<' {
-		p.currentChar -= len(string(c))
-		textNode = newText()
-		var n = indexOfFrom(p.html, "<", p.currentChar)
-		if n == -1 {
-			textNode.setInnerHTML(substring(p.html, p.currentChar, len(p.html)))
-			p.currentChar = len(p.html)
-		} else {
-			textNode.setInnerHTML(substring(p.html, p.currentChar, n))
-			p.logger.Info("p.Readnode", "textNode.innerHTML", textNode.innerHTML)
-			p.currentChar = n
-		}
-		return textNode
-	}
-
-	if p.match("![CDATA[") {
-		var endChar = indexOfFrom(p.html, "]]>", p.currentChar)
-		if endChar == -1 {
-			p.logger.Error("unclosed CDATA section")
-			return nil
-		}
-		textNode = newText()
-		textNode.setTextContent(substring(p.html, p.currentChar, endChar))
-		p.currentChar = endChar + len("]]>")
-		return textNode
-	}
-
-	c, _ = p.peekNext()
-
-	// Read Comment node. Normally, Comment nodes know their inner
-	// textContent, but we don't really care about Comment nodes (we throw
-	// them away in readChildren()). So just returning an empty Comment node
-	// here is sufficient.
-	if c == '!' || c == '?' {
-		p.currentChar++
-		return p.discardNextComment()
-	}
-
-	// If we're reading a closing tag, return null. This means we've reached
-	// the end of this set of child nodes.
-	if c == '/' {
-		p.currentChar--
-		return nil
-	}
-
-	// Otherwise, we're looking at an Element node
-	node, closed := p.makeElementNode()
-	if node == nil {
-		return nil
-	}
-
-	var localName = node.LocalName
-
-	// If this isn't a void Element, read its child nodes
-	if !closed {
-		p.readChildren(node)
-		var closingTag = "</" + node.matchingTag + ">"
-		p.logger.Debug("matching", "currentChar", p.currentChar, "closingTag", closingTag)
-		if !p.match(closingTag) {
-			p.logger.Error("expected " + closingTag + " and got " + substring(p.html, p.currentChar, p.currentChar+len(closingTag)))
-			return nil
-		}
-	}
-	// Only use the first title, because SVG might have other
-	// title elements which we don't care about (medium.com
-	// does this, at least).
-	if localName == "title" && p.doc.title == "" {
-		p.doc.title = strings.TrimSpace(node.getTextContent())
-	} else if localName == "head" {
-		p.doc.head = node
-	} else if localName == "body" {
-		p.doc.Body = node
-	} else if localName == "html" {
-		p.doc.DocumentElement = node
+	for _, a := range token.Attr {
+		node.setAttribute(a.Key, a.Val)
 	}
 
 	return node
 }
 
+// Reads the next child node from the input. If we're reading a closing
+// tag, or if we've reached the end of input, return null. Returns the node
+func (p *domParser) readNode(n *node) {
+loop:
+	for {
+
+		tt := p.z.Next()
+		switch tt {
+
+		case html.ErrorToken:
+			break loop
+
+		case html.DoctypeToken:
+			n.appendChild(&node{
+				nodeName: "#documentType",
+				NodeType: documentTypeNode,
+			})
+
+		case html.CommentToken:
+			// discard
+
+		case html.TextToken:
+			{
+				textNode := newText()
+
+				data := p.z.Raw()
+				c, _ := utf8.DecodeRune(data)
+				if c != '<' {
+					textNode.setInnerHTML(string(data))
+					n.appendChild(textNode)
+				}
+
+				txt := string(data)
+				if strings.HasPrefix(txt, "![CDATA[") {
+					textNode = newText()
+
+					s := strings.Index(txt, "![CDATA[")
+					e := strings.Index(txt, "]]>")
+					if s != -1 && e != -1 {
+						textNode.setTextContent(txt[s:e])
+						n.appendChild(textNode)
+					}
+				}
+			}
+
+		case html.StartTagToken, html.SelfClosingTagToken:
+			{
+				node := p.makeElementNode()
+				if node == nil {
+					p.logger.Debug("cannot create element node")
+					break loop
+				}
+
+				// If this isn't a void Element, read its child nodes
+				if tt == html.StartTagToken {
+					p.readNode(node)
+				}
+
+				// Only use the first title, because SVG might have other
+				// title elements which we don't care about (medium.com
+				// does this, at least).
+				var localName = node.LocalName
+				if localName == "title" && p.doc.title == "" {
+					p.doc.title = strings.TrimSpace(node.getTextContent())
+				} else if localName == "head" {
+					p.doc.head = node
+				} else if localName == "body" {
+					p.doc.Body = node
+				} else if localName == "html" {
+					p.doc.DocumentElement = node
+				}
+
+				n.appendChild(node)
+			}
+
+		case html.EndTagToken:
+			if n.LocalName == p.z.Token().Data {
+				break loop
+			}
+		}
+	}
+}
+
 // Parses an HTML string and returns a JS implementation of the Document.
-func (p *domParser) parse(html, url string) *node {
-	p.html = html
+func (p *domParser) parse(htmlSrc, url string) *node {
+	p.html = htmlSrc
+	p.z = html.NewTokenizer(strings.NewReader(htmlSrc))
 	p.doc = newDocument(url)
-	p.readChildren(p.doc)
+	p.readNode(p.doc)
 
 	// If this is an HTML document, remove root-level children except for the
 	// <html> node

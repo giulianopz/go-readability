@@ -100,17 +100,19 @@ func TestParse(t *testing.T) {
 			)
 			if err != nil {
 				t.Error(err)
+				t.FailNow()
 			}
 			result, err := reader.Parse()
 			if err != nil {
 				t.Error(err)
+				t.FailNow()
 			}
 
 			t.Run("should extract expected content", func(t *testing.T) {
 
 				var actualDOM = domGenerationFn(prettyPrint(result.Content), uri)
 				var expectedDOM = domGenerationFn(string(prettyPrint(string(testPage.expectedContent))), uri)
-				traverseDOM(func(actualNode, expectedNode *node) bool {
+				failed := traverseDOM(func(actualNode, expectedNode *node) bool {
 
 					if actualNode != nil && expectedNode != nil {
 
@@ -153,6 +155,10 @@ func TestParse(t *testing.T) {
 					}
 					return true
 				}, expectedDOM, actualDOM)
+
+				if failed {
+					os.WriteFile(testPage.dir+"/failed.html", []byte(result.Content), os.ModePerm)
+				}
 			})
 
 			t.Run("should extract expected title", func(t *testing.T) {
@@ -248,7 +254,7 @@ func inOrderIgnoreEmptyTextNodes(fromNode *node) *node {
 	return fromNode
 }
 
-func traverseDOM(callback func(*node, *node) bool, expectedDOM, actualDOM *node) {
+func traverseDOM(callback func(*node, *node) bool, expectedDOM, actualDOM *node) bool {
 	var actualNode = actualDOM.DocumentElement
 	if actualNode == nil {
 		actualNode = actualDOM.ChildNodes[0]
@@ -260,11 +266,12 @@ func traverseDOM(callback func(*node, *node) bool, expectedDOM, actualDOM *node)
 	for actualNode != nil || expectedNode != nil {
 		// We'll stop if we don't have both actualNode and expectedNode
 		if !callback(actualNode, expectedNode) {
-			break
+			return true
 		}
 		actualNode = inOrderIgnoreEmptyTextNodes(actualNode)
 		expectedNode = inOrderIgnoreEmptyTextNodes(expectedNode)
 	}
+	return false
 }
 
 // Collapse subsequent whitespace like HTML:
