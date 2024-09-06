@@ -26,24 +26,6 @@ func insert(newNode *Node, idx int, nodes []*Node) []*Node {
 	return nodes
 }
 
-func substring(str string, s, e int) string {
-	// If indexStart is greater than indexEnd, then the effect of substring() is as if the two arguments were swapped.
-	// Any argument value that is less than 0 or greater than str.length is treated as if it were 0 and str.length, respectively.
-	// See: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/substring
-	var indexStart, indexEnd, max int = s, e, len(str)
-	if indexStart < 0 {
-		indexStart = 0
-	}
-	if indexEnd > max {
-		indexEnd = max
-	}
-	if indexStart > indexEnd {
-		indexStart, indexEnd = indexEnd, indexStart
-	}
-	ret := str[indexStart:indexEnd]
-	return ret
-}
-
 func anyOf(strings ...string) string {
 	for _, s := range strings {
 		if s != "" {

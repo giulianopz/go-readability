@@ -471,19 +471,15 @@ func (r *Readability) getArticleTitle() string {
 
 		// If we don't, let's extract the title out of the original title string.
 		if !match {
-			curTitle = substring(origTitle,
-				strings.LastIndex(origTitle, ":")+1,
-				len(origTitle))
+			curTitle = origTitle[strings.LastIndex(origTitle, ":")+1:]
 		}
 
 		// If the title is now too short, try the first colon instead:
 		if wordCount(curTitle) < 3 {
-			curTitle = substring(origTitle,
-				strings.Index(origTitle, ":")+1,
-				len(origTitle))
+			curTitle = origTitle[strings.Index(origTitle, ":")+1:]
 			// But if we have too many words before the colon there's something weird
 			// with the titles and the H tags so let's just use the original title instead
-		} else if wordCount(substring(origTitle, 0, strings.Index(origTitle, ":"))) > 5 {
+		} else if wordCount(origTitle[:strings.Index(origTitle, ":")]) > 5 {
 			curTitle = origTitle
 		}
 	} else if len([]rune(curTitle)) > 150 || len([]rune(curTitle)) < 15 {
