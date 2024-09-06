@@ -96,7 +96,6 @@ func ExampleReadability_Parse() {
 		htmlSource,
 		"http://antirez.com/news/120",
 		readability.ClassesToPreserve("caption"),
-		readability.LogLevel(-1),
 	)
 	handle(err)
 

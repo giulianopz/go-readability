@@ -24,11 +24,9 @@ package readability
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"math"
 	"net/url"
-	"os"
 	"reflect"
 	"slices"
 	"strconv"
@@ -81,8 +79,7 @@ var (
 type Readability struct {
 	options         *Options
 	flags           int
-	doc             *node
-	logger          *slog.Logger
+	doc             *Node
 	articleTitle    string
 	articleByline   string
 	articleDir      string
@@ -92,27 +89,8 @@ type Readability struct {
 }
 
 type attempt struct {
-	articleContent *node
+	articleContent *Node
 	textLength     int
-}
-
-const disableLogging = -1
-
-func loggerWith(level slog.Level) *slog.Logger {
-
-	if level == disableLogging {
-		return slog.New(
-			slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}),
-		)
-	}
-
-	l := new(slog.LevelVar)
-	l.Set(level)
-	logger := slog.New(
-		slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: l}),
-	)
-	logger.Info("configured logging", "level", level)
-	return logger
 }
 
 // New is the public constructor of Readability and it supports the following options:
@@ -138,12 +116,10 @@ func New(htmlSource, uri string, opts ...Option) (*Readability, error) {
 		opt(r.options)
 	}
 
-	r.doc = newDOMParser(LogLevel(r.options.logLevel)).parse(htmlSource, uri)
+	r.doc = newDOMParser().parse(htmlSource, uri)
 	if r.doc == nil || r.doc.Body == nil {
 		return nil, fmt.Errorf("cannot parse doc")
 	}
-
-	r.logger = loggerWith(r.options.logLevel)
 
 	// Start with all flags set
 	r.flags = flagStripUnlikelys | flagWeightClasses | flagCleanConditionally
@@ -154,8 +130,8 @@ func New(htmlSource, uri string, opts ...Option) (*Readability, error) {
 type Result struct {
 	// article title
 	Title string
-	// HTML string of processed article Content
-	Content string
+	// HTML string of processed article HTMLContent
+	HTMLContent string
 	// text content of the article, with all the HTML tags removed
 	TextContent string
 	// length of an article, in characters (runes)
@@ -175,7 +151,7 @@ type Result struct {
 }
 
 // Run any post-process modifications to article content as necessary.
-func (r *Readability) postProcessContent(articleContent *node) {
+func (r *Readability) postProcessContent(articleContent *Node) {
 	// Readability cannot open relative uris so we convert them to absolute uris.
 	r.fixRelativeUris(articleContent)
 
@@ -190,20 +166,22 @@ func (r *Readability) postProcessContent(articleContent *node) {
 // Iterates over a NodeList, calls `filterFn` for each node and removes node
 // if function returned `true`.
 // If function is not passed, removes all the nodes in node list.
-func (r *Readability) removeNodes(nodeList []*node, filterFn func(n *node) bool) {
+func (r *Readability) removeNodes(nodeList []*Node, filterFn func(n *Node) bool) {
 	for i := len(nodeList) - 1; i >= 0; i-- {
 		node := nodeList[i]
 		parentNode := node.ParentNode
 		if parentNode != nil {
 			if filterFn == nil || filterFn(node) {
-				parentNode.removeChild(node)
+				if _, err := parentNode.RemoveChild(node); err != nil {
+					slog.Error("cannot remove child", slog.String("err", err.Error()))
+				}
 			}
 		}
 	}
 }
 
 // Iterates over a NodeList, and calls setNodeTag for each node.
-func (r *Readability) replaceNodeTags(nodeList []*node, newtagName string) {
+func (r *Readability) replaceNodeTags(nodeList []*Node, newtagName string) {
 	for _, node := range nodeList {
 		r.setNodeTag(node, newtagName)
 	}
@@ -211,7 +189,7 @@ func (r *Readability) replaceNodeTags(nodeList []*node, newtagName string) {
 
 // Iterate over a NodeList, return true if any of the provided iterate
 // function calls returns true, false otherwise.
-func (r *Readability) someNode(nodeList []*node, fn func(n *node) bool) bool {
+func (r *Readability) someNode(nodeList []*Node, fn func(n *Node) bool) bool {
 	for _, node := range nodeList {
 		if fn(node) {
 			return true
@@ -222,7 +200,7 @@ func (r *Readability) someNode(nodeList []*node, fn func(n *node) bool) bool {
 
 // Iterate over a NodeList, return true if all of the provided iterate
 // function calls return true, false otherwise.
-func (r *Readability) everyNode(nodeList []*node, fn func(n *node) bool) bool {
+func (r *Readability) everyNode(nodeList []*Node, fn func(n *Node) bool) bool {
 	for _, node := range nodeList {
 		if !fn(node) {
 			return false
@@ -232,16 +210,16 @@ func (r *Readability) everyNode(nodeList []*node, fn func(n *node) bool) bool {
 }
 
 // Concat all nodelists passed as arguments.
-func (r *Readability) concatNodeLists(nodeLists ...[]*node) []*node {
-	ret := make([]*node, 0)
+func (r *Readability) concatNodeLists(nodeLists ...[]*Node) []*Node {
+	ret := make([]*Node, 0)
 	for _, list := range nodeLists {
 		ret = append(ret, list...)
 	}
 	return ret
 }
 
-func (r *Readability) getAllNodesWithTag(n *node, tagNames ...string) []*node {
-	nodes := make([]*node, 0)
+func (r *Readability) getAllNodesWithTag(n *Node, tagNames ...string) []*Node {
+	nodes := make([]*Node, 0)
 	for _, tag := range tagNames {
 		nodes = append(nodes, n.getElementsByTagName(tag)...)
 	}
@@ -251,19 +229,19 @@ func (r *Readability) getAllNodesWithTag(n *node, tagNames ...string) []*node {
 // Removes the class="" attribute from every element in the given
 // subtree, except those that match CLASSES_TO_PRESERVE and
 // the classesToPreserve array from the options object.
-func (r *Readability) cleanClasses(n *node) {
-	className := n.getAttribute("class")
+func (r *Readability) cleanClasses(n *Node) {
+	className := n.GetAttribute("class")
 	if className != "" {
 		className = strings.Join(filter(r.preserve, multipleWhitespaces.Split(className, -1)...), " ")
 	}
 
 	if className != "" {
-		n.setAttribute("class", className)
+		n.SetAttribute("class", className)
 	} else {
-		n.removeAttribute("class")
+		n.RemoveAttribute("class")
 	}
 
-	for n := n.firstElementChild(); n != nil; n = n.NextElementSibling {
+	for n := n.FirstElementChild(); n != nil; n = n.NextElementSibling {
 		r.cleanClasses(n)
 	}
 }
@@ -284,7 +262,7 @@ func filter(filterFn func(string) bool, strs ...string) []string {
 
 // Converts each <a> and <img> uri in the given element to an absolute URI,
 // ignoring #ref URIs.
-func (r *Readability) fixRelativeUris(articleContent *node) {
+func (r *Readability) fixRelativeUris(articleContent *Node) {
 	baseURI := r.doc.getBaseURI()
 	documentURI := r.doc.DocumentURI
 
@@ -364,22 +342,22 @@ func (r *Readability) fixRelativeUris(articleContent *node) {
 
 	var links = r.getAllNodesWithTag(articleContent, "a")
 	for _, link := range links {
-		var href = link.getAttribute("href")
+		var href = link.GetAttribute("href")
 		if href != "" {
 			// Remove links with javascript: URIs, since
 			// they won't work after scripts have been removed from the page.
 			if strings.HasPrefix(href, "javascript:") {
 				// if the link only contains simple text content, it can be converted to a text node
 				if len(link.ChildNodes) == 1 && link.ChildNodes[0].NodeType == textNode {
-					var text = r.doc.createTextNode(link.getTextContent())
-					link.ParentNode.replaceChild(text, link)
+					var text = r.doc.createTextNode(link.GetTextContent())
+					link.ParentNode.ReplaceChild(text, link)
 				} else {
 					// if the link has multiple children, they should all be preserved
-					var container = r.doc.createElement("span")
-					for link.firstChild() != nil {
-						container.appendChild(link.firstChild())
+					var container = r.doc.createElementNode("span")
+					for link.FirstChild() != nil {
+						container.AppendChild(link.FirstChild())
 					}
-					link.ParentNode.replaceChild(container, link)
+					link.ParentNode.ReplaceChild(container, link)
 				}
 			} else {
 				if strings.Contains(href, ",%20") {
@@ -387,9 +365,9 @@ func (r *Readability) fixRelativeUris(articleContent *node) {
 					for _, link := range strings.Split(href, ",%20") {
 						hrefs = append(hrefs, toAbsoluteURI(link))
 					}
-					link.setAttribute("href", strings.Join(hrefs, ",%20"))
+					link.SetAttribute("href", strings.Join(hrefs, ",%20"))
 				} else {
-					link.setAttribute("href", toAbsoluteURI(href))
+					link.SetAttribute("href", toAbsoluteURI(href))
 				}
 			}
 		}
@@ -400,15 +378,15 @@ func (r *Readability) fixRelativeUris(articleContent *node) {
 	)
 
 	for _, media := range medias {
-		var src = media.getAttribute("src")
+		var src = media.GetAttribute("src")
 		if src != "" {
-			media.setAttribute("src", toAbsoluteURI(src))
+			media.SetAttribute("src", toAbsoluteURI(src))
 		}
-		var poster = media.getAttribute("poster")
+		var poster = media.GetAttribute("poster")
 		if poster != "" {
-			media.setAttribute("poster", toAbsoluteURI(poster))
+			media.SetAttribute("poster", toAbsoluteURI(poster))
 		}
-		var srcset = media.getAttribute("srcset")
+		var srcset = media.GetAttribute("srcset")
 		if srcset != "" {
 			submatches := srcsetUrl.FindAllStringSubmatch(srcset, -1)
 			var newSrcset []string
@@ -416,27 +394,27 @@ func (r *Readability) fixRelativeUris(articleContent *node) {
 				newSrcset = append(newSrcset, toAbsoluteURI(submatch[1])+submatch[2]+submatch[3])
 			}
 			if !strings.Contains(srcset, ", ") {
-				media.setAttribute("srcset", strings.Join(newSrcset, ""))
+				media.SetAttribute("srcset", strings.Join(newSrcset, ""))
 			} else {
-				media.setAttribute("srcset", strings.Join(newSrcset, " "))
+				media.SetAttribute("srcset", strings.Join(newSrcset, " "))
 			}
 		}
 	}
 }
 
-func (r *Readability) simplifyNestedElements(articleContent *node) {
+func (r *Readability) simplifyNestedElements(articleContent *Node) {
 	var node = articleContent
 	for node != nil {
-		if node.ParentNode != nil && slices.Contains([]string{"DIV", "SECTION"}, node.TagName) && !strings.HasPrefix(node.getId(), "readability") {
+		if node.ParentNode != nil && slices.Contains([]string{"DIV", "SECTION"}, node.TagName) && !strings.HasPrefix(node.GetId(), "readability") {
 			if r.isElementWithoutContent(node) {
 				node = r.removeAndGetNext(node)
 				continue
 			} else if r.hasSingleTagInsideElement(node, "DIV") || r.hasSingleTagInsideElement(node, "SECTION") {
 				var child = node.Children[0]
-				for i := 0; i < node.getAttributeLen(); i++ {
-					child.setAttribute(node.getAttributeByIndex(i).getName(), node.getAttributeByIndex(i).getValue())
+				for i := 0; i < node.GetAttributeLen(); i++ {
+					child.SetAttribute(node.GetAttributeByIndex(i).getName(), node.GetAttributeByIndex(i).getValue())
 				}
-				node.ParentNode.replaceChild(child, node)
+				node.ParentNode.ReplaceChild(child, node)
 				node = child
 				continue
 			}
@@ -448,11 +426,8 @@ func (r *Readability) simplifyNestedElements(articleContent *node) {
 // Get the article title as an H1.
 func (r *Readability) getArticleTitle() string {
 	var doc = r.doc
-	var curTitle = ""
-	var origTitle = ""
-
-	curTitle = strings.TrimSpace(doc.title)
-	origTitle = curTitle
+	var curTitle = strings.TrimSpace(doc.title)
+	var origTitle = curTitle
 
 	// If they had an element with id "title" in their HTML
 	if curTitle == "" {
@@ -490,8 +465,8 @@ func (r *Readability) getArticleTitle() string {
 			doc.getElementsByTagName("h2"),
 		)
 		var trimmedTitle = strings.TrimSpace(curTitle)
-		var match = r.someNode(headings, func(heading *node) bool {
-			return strings.TrimSpace(heading.getTextContent()) == trimmedTitle
+		var match = r.someNode(headings, func(heading *Node) bool {
+			return strings.TrimSpace(heading.GetTextContent()) == trimmedTitle
 		})
 
 		// If we don't, let's extract the title out of the original title string.
@@ -548,11 +523,11 @@ func (r *Readability) prepDocument() {
 // Finds the next node, starting from the given node, and ignoring
 // whitespace in between. If the given node is an element, the same node is
 // returned.
-func (r *Readability) nextNode(n *node) *node {
+func (r *Readability) nextNode(n *Node) *Node {
 	var next = n
 	for next != nil &&
 		next.NodeType != elementNode &&
-		whitespace.MatchString(next.getTextContent()) {
+		whitespace.MatchString(next.GetTextContent()) {
 		next = next.NextSibling
 	}
 	return next
@@ -566,7 +541,7 @@ func (r *Readability) nextNode(n *node) *node {
 // will become:
 //
 //	<div>foo<br>bar<p>abc</p></div>
-func (r *Readability) replaceBrs(n *node) {
+func (r *Readability) replaceBrs(n *Node) {
 
 	for _, br := range r.getAllNodesWithTag(n, "br") {
 		var next = br.NextSibling
@@ -581,7 +556,9 @@ func (r *Readability) replaceBrs(n *node) {
 		for next = r.nextNode(next); next != nil && next.TagName == "BR"; {
 			replaced = true
 			var brSibling = next.NextSibling
-			next.ParentNode.removeChild(next)
+			if _, err := next.ParentNode.RemoveChild(next); err != nil {
+				slog.Error("cannot remove child", slog.String("err", err.Error()))
+			}
 			next = brSibling
 		}
 
@@ -589,8 +566,8 @@ func (r *Readability) replaceBrs(n *node) {
 		// all sibling nodes as children of the <p> until we hit another <br>
 		// chain.
 		if replaced {
-			var p = r.doc.createElement("p")
-			br.ParentNode.replaceChild(p, br)
+			var p = r.doc.createElementNode("p")
+			br.ParentNode.ReplaceChild(p, br)
 
 			next = p.NextSibling
 			for next != nil {
@@ -608,12 +585,14 @@ func (r *Readability) replaceBrs(n *node) {
 
 				// Otherwise, make this node a child of the new <p>.
 				var sibling = next.NextSibling
-				p.appendChild(next)
+				p.AppendChild(next)
 				next = sibling
 			}
 
-			for p.lastChild() != nil && r.isWhitespace(p.lastChild()) {
-				p.removeChild(p.lastChild())
+			for p.LastChild() != nil && r.isWhitespace(p.LastChild()) {
+				if _, err := p.RemoveChild(p.LastChild()); err != nil {
+					slog.Error("cannot remove child", slog.String("err", err.Error()))
+				}
 			}
 
 			if p.ParentNode.TagName == "P" {
@@ -623,8 +602,8 @@ func (r *Readability) replaceBrs(n *node) {
 	}
 }
 
-func (r *Readability) setNodeTag(n *node, tag string) *node {
-	r.logger.Debug("setNodeTag", "node", n, "tag", tag)
+func (r *Readability) setNodeTag(n *Node, tag string) *Node {
+	slog.Debug("setNodeTag", "node", n, "tag", tag)
 	n.LocalName = strings.ToLower(tag)
 	n.TagName = strings.ToUpper(tag)
 	return n
@@ -632,7 +611,7 @@ func (r *Readability) setNodeTag(n *node, tag string) *node {
 
 // Prepare the article node for display. Clean out any inline styles,
 // iframes, forms, strip extraneous <p> tags, etc.
-func (r *Readability) prepArticle(articleContent *node) {
+func (r *Readability) prepArticle(articleContent *Node) {
 	r.cleanStyles(articleContent)
 
 	// Check for data tables before we continue, to avoid removing items in
@@ -655,9 +634,9 @@ func (r *Readability) prepArticle(articleContent *node) {
 	// which means we don't remove the top candidates even they have "share".
 	var shareElementThreshold = defaultCharThreshold
 	for _, topCandidate := range articleContent.Children {
-		r.cleanMatchedNodes(topCandidate, func(n *node, matchString string) bool {
+		r.cleanMatchedNodes(topCandidate, func(n *Node, matchString string) bool {
 			return shareElements.MatchString(matchString) &&
-				len([]rune(n.getTextContent())) < shareElementThreshold
+				len([]rune(n.GetTextContent())) < shareElementThreshold
 		})
 	}
 
@@ -678,7 +657,7 @@ func (r *Readability) prepArticle(articleContent *node) {
 	r.replaceNodeTags(r.getAllNodesWithTag(articleContent, "h1"), "h2")
 
 	// Remove extra paragraphs
-	r.removeNodes(r.getAllNodesWithTag(articleContent, "p"), func(paragraph *node) bool {
+	r.removeNodes(r.getAllNodesWithTag(articleContent, "p"), func(paragraph *Node) bool {
 		var imgCount = len(paragraph.getElementsByTagName("img"))
 		var embedCount = len(paragraph.getElementsByTagName("embed"))
 		var objectCount = len(paragraph.getElementsByTagName("object"))
@@ -691,26 +670,28 @@ func (r *Readability) prepArticle(articleContent *node) {
 	for _, br := range r.getAllNodesWithTag(articleContent, "br") {
 		var next = r.nextNode(br.NextSibling)
 		if next != nil && next.TagName == "P" {
-			br.ParentNode.removeChild(br)
+			if _, err := br.ParentNode.RemoveChild(br); err != nil {
+				slog.Error("cannot remove child", slog.String("err", err.Error()))
+			}
 		}
 	}
 
 	// Remove single-cell tables
 	for _, table := range r.getAllNodesWithTag(articleContent, "table") {
-		var tbody *node = table
+		var tbody *Node = table
 		if r.hasSingleTagInsideElement(table, "TBODY") {
-			tbody = table.firstElementChild()
+			tbody = table.FirstElementChild()
 		}
 		if r.hasSingleTagInsideElement(tbody, "TR") {
-			var row = tbody.firstElementChild()
+			var row = tbody.FirstElementChild()
 			if r.hasSingleTagInsideElement(row, "TD") {
-				var cell = row.firstElementChild()
+				var cell = row.FirstElementChild()
 				var tag = "DIV"
 				if r.everyNode(cell.ChildNodes, r.isPhrasingContent) {
 					tag = "P"
 				}
 				cell = r.setNodeTag(cell, tag)
-				table.ParentNode.replaceChild(cell, table)
+				table.ParentNode.ReplaceChild(cell, table)
 			}
 		}
 	}
@@ -718,7 +699,7 @@ func (r *Readability) prepArticle(articleContent *node) {
 
 // Initialize a node with the readability object. Also checks the
 // className/id for special names to add to its score.
-func (r *Readability) initializeNode(n *node) {
+func (r *Readability) initializeNode(n *Node) {
 
 	n.ReadabilityNode = &readabilityNode{
 		ContentScore: 0,
@@ -741,9 +722,11 @@ func (r *Readability) initializeNode(n *node) {
 	n.ReadabilityNode.ContentScore += r.getClassWeight(n)
 }
 
-func (r *Readability) removeAndGetNext(n *node) *node {
+func (r *Readability) removeAndGetNext(n *Node) *Node {
 	var nextNode = r.getNextNode(n, true)
-	n.ParentNode.removeChild(n)
+	if _, err := n.ParentNode.RemoveChild(n); err != nil {
+		slog.Error("cannot remove child", slog.String("err", err.Error()))
+	}
 	return nextNode
 }
 
@@ -751,10 +734,10 @@ func (r *Readability) removeAndGetNext(n *node) *node {
 // Pass true for the second parameter to indicate this node itself
 // (and its kids) are going away, and we want the next node over.
 // Calling this in a loop will traverse the DOM depth-first.
-func (r *Readability) getNextNode(n *node, ignoreSelfAndKids bool) *node {
+func (r *Readability) getNextNode(n *Node, ignoreSelfAndKids bool) *Node {
 	// First check for kids if those aren't being ignored
-	if !ignoreSelfAndKids && n.firstElementChild() != nil {
-		return n.firstElementChild()
+	if !ignoreSelfAndKids && n.FirstElementChild() != nil {
+		return n.FirstElementChild()
 	}
 	// Then for siblings...
 	if n.NextElementSibling != nil {
@@ -793,24 +776,24 @@ func (r *Readability) textSimilarity(textA, textB string) float64 {
 	return 1 - distanceB
 }
 
-func (r *Readability) checkByline(n *node, matchString string) bool {
+func (r *Readability) checkByline(n *Node, matchString string) bool {
 	if r.articleByline != "" {
 		return false
 	}
 
-	var rel = n.getAttribute("rel")
-	var itemprop = n.getAttribute("itemprop")
+	var rel = n.GetAttribute("rel")
+	var itemprop = n.GetAttribute("itemprop")
 
-	if (rel == "author" || strings.Contains(itemprop, "author") || byline.MatchString(matchString)) && r.isValidByline(n.getTextContent()) {
-		r.articleByline = strings.TrimSpace(n.getTextContent())
+	if (rel == "author" || strings.Contains(itemprop, "author") || byline.MatchString(matchString)) && r.isValidByline(n.GetTextContent()) {
+		r.articleByline = strings.TrimSpace(n.GetTextContent())
 		return true
 	}
 
 	return false
 }
 
-func (r *Readability) getNodeAncestors(n *node, maxDepth int) []*node {
-	var i, ancestors = 0, []*node{}
+func (r *Readability) getNodeAncestors(n *Node, maxDepth int) []*Node {
+	var i, ancestors = 0, []*Node{}
 	for n.ParentNode != nil {
 		ancestors = append(ancestors, n.ParentNode)
 		if i++; i == maxDepth {
@@ -823,9 +806,9 @@ func (r *Readability) getNodeAncestors(n *node, maxDepth int) []*node {
 
 // Using a variety of metrics (content score, classname, element types), find the content that is
 // most likely to be the stuff a user wants to read. Then return it wrapped up in a div.
-func (r *Readability) grabArticle(page *node) *node {
+func (r *Readability) grabArticle(page *Node) *Node {
 
-	r.logger.Debug("**** grabArticle ****")
+	slog.Debug("**** grabArticle ****")
 	var doc = r.doc
 
 	var isPaging bool
@@ -838,42 +821,42 @@ func (r *Readability) grabArticle(page *node) *node {
 
 	// We can't grab an article if we don't have a page!
 	if page == nil {
-		r.logger.Debug("No body found in document. Abort.")
+		slog.Debug("No body found in document. Abort.")
 		return nil
 	}
 
-	var pageCacheHtml = page.getInnerHTML()
+	var pageCacheHtml = page.GetInnerHTML()
 
 	for {
-		r.logger.Debug("Starting grabArticle loop")
+		slog.Debug("Starting grabArticle loop")
 		var stripUnlikelyCandidates = r.flagIsActive(flagStripUnlikelys)
 
 		// First, node prepping. Trash nodes that look cruddy (like ones with the
 		// class name "comment", etc), and turn divs into P tags where they have been
 		// used inappropriately (as in, where they contain no other block level elements.)
-		var elementsToScore []*node
+		var elementsToScore []*Node
 		var n = r.doc.DocumentElement
 
 		var shouldRemoveTitleHeader bool = true
 
 		for n != nil {
 
-			r.logger.Debug("elementsToScore", "nodeText", n.getTextContent())
+			slog.Debug("elementsToScore", "nodeText", n.GetTextContent())
 
 			if n.TagName == "HTML" {
-				r.articleLang = n.getAttribute("lang")
+				r.articleLang = n.GetAttribute("lang")
 			}
 
-			var matchString = n.getClassName() + " " + n.getId()
+			var matchString = n.GetClassName() + " " + n.GetId()
 
 			if !isProbablyVisible(n) {
-				r.logger.Debug("Removing hidden node - " + matchString)
+				slog.Debug("Removing hidden node - " + matchString)
 				n = r.removeAndGetNext(n)
 				continue
 			}
 
 			// User is not able to see elements applied with both "aria-modal = true" and "role = dialog"
-			if n.getAttribute("aria-modal") == "true" && n.getAttribute("role") == "dialog" {
+			if n.GetAttribute("aria-modal") == "true" && n.GetAttribute("role") == "dialog" {
 				n = r.removeAndGetNext(n)
 				continue
 			}
@@ -885,7 +868,7 @@ func (r *Readability) grabArticle(page *node) *node {
 			}
 
 			if shouldRemoveTitleHeader && r.headerDuplicatesTitle(n) {
-				r.logger.Debug("Removing header:", "textContent", strings.TrimSpace(n.getTextContent()), "articleTitle", strings.TrimSpace(r.articleTitle))
+				slog.Debug("Removing header:", "textContent", strings.TrimSpace(n.GetTextContent()), "articleTitle", strings.TrimSpace(r.articleTitle))
 				shouldRemoveTitleHeader = false
 				n = r.removeAndGetNext(n)
 				continue
@@ -899,14 +882,14 @@ func (r *Readability) grabArticle(page *node) *node {
 					!r.hasAncestorTag(n, "code", 3, nil) &&
 					n.TagName != "BODY" &&
 					n.TagName != "A" {
-					r.logger.Debug("Removing unlikely candidate", "matchString", matchString)
+					slog.Debug("Removing unlikely candidate", "matchString", matchString)
 					n = r.removeAndGetNext(n)
 					continue
 				}
 			}
 
-			if slices.Contains(unlinkelyRoles, n.getAttribute("role")) {
-				r.logger.Debug("Removing content", "role", n.getAttribute("role"), "matchString", matchString)
+			if slices.Contains(unlinkelyRoles, n.GetAttribute("role")) {
+				slog.Debug("Removing content", "role", n.GetAttribute("role"), "matchString", matchString)
 				n = r.removeAndGetNext(n)
 				continue
 			}
@@ -927,21 +910,23 @@ func (r *Readability) grabArticle(page *node) *node {
 			// Turn all divs that don't have children block level elements into p's
 			if n.TagName == "DIV" {
 				// Put phrasing content into paragraphs.
-				var p *node
-				var childNode = n.firstChild()
+				var p *Node
+				var childNode = n.FirstChild()
 				for childNode != nil {
 					var nextSibling = childNode.NextSibling
 					if r.isPhrasingContent(childNode) {
 						if p != nil {
-							p.appendChild(childNode)
+							p.AppendChild(childNode)
 						} else if !r.isWhitespace(childNode) {
-							p = doc.createElement("p")
-							n.replaceChild(p, childNode)
-							p.appendChild(childNode)
+							p = doc.createElementNode("p")
+							n.ReplaceChild(p, childNode)
+							p.AppendChild(childNode)
 						}
 					} else if p != nil {
-						for p.lastChild() != nil && r.isWhitespace(p.lastChild()) {
-							p.removeChild(p.lastChild())
+						for p.LastChild() != nil && r.isWhitespace(p.LastChild()) {
+							if _, err := p.RemoveChild(p.LastChild()); err != nil {
+								slog.Error("cannot remove child", slog.String("err", err.Error()))
+							}
 						}
 						p = nil
 					}
@@ -954,7 +939,7 @@ func (r *Readability) grabArticle(page *node) *node {
 				// algorithm with DIVs with are, in practice, paragraphs.
 				if r.hasSingleTagInsideElement(n, "P") && r.getLinkDensity(n) < 0.25 {
 					var newNode = n.Children[0]
-					n.ParentNode.replaceChild(newNode, n)
+					n.ParentNode.ReplaceChild(newNode, n)
 					n = newNode
 					elementsToScore = append(elementsToScore, n)
 				} else if !r.hasChildBlockElement(n) {
@@ -969,7 +954,7 @@ func (r *Readability) grabArticle(page *node) *node {
 		// Then add their score to their parent node.
 		// A score is determined by things like number of commas, class names, etc. Maybe eventually link density.
 
-		var candidates []*node
+		var candidates []*Node
 		for _, elementToScore := range elementsToScore {
 			if elementToScore.ParentNode == nil {
 				continue
@@ -1021,13 +1006,13 @@ func (r *Readability) grabArticle(page *node) *node {
 					scoreDivider = level * 3
 				}
 				ancestor.ReadabilityNode.ContentScore += contentScore / float64(scoreDivider)
-				r.logger.Debug("assigned score", "ancestor", ancestor.getTextContent(), "score", ancestor.ReadabilityNode.ContentScore)
+				slog.Debug("assigned score", "ancestor", ancestor.GetTextContent(), "score", ancestor.ReadabilityNode.ContentScore)
 			}
 		}
 
 		// After we've calculated scores, loop through all of the possible
 		// candidate nodes we found and find the one with the highest score.
-		var topCandidates []*node
+		var topCandidates []*Node
 		for c := 0; c < len(candidates); c++ {
 			var candidate = candidates[c]
 
@@ -1037,10 +1022,10 @@ func (r *Readability) grabArticle(page *node) *node {
 			var candidateScore = candidate.ReadabilityNode.ContentScore * (1 - r.getLinkDensity(candidate))
 			candidate.ReadabilityNode.ContentScore = candidateScore
 
-			r.logger.Debug("grabArticle", "candidate", candidate.getTextContent(), "scaled-score", candidateScore)
+			slog.Debug("grabArticle", "candidate", candidate.GetTextContent(), "scaled-score", candidateScore)
 
 			for t := 0; t < r.options.nbTopCandidates; t++ {
-				var aTopCandidate *node
+				var aTopCandidate *Node
 				if len(topCandidates) > t {
 					aTopCandidate = topCandidates[t]
 				}
@@ -1056,33 +1041,33 @@ func (r *Readability) grabArticle(page *node) *node {
 			}
 		}
 
-		var topCandidate *node
+		var topCandidate *Node
 		if len(topCandidates) > 0 {
 			topCandidate = topCandidates[0]
 		}
 		var neededToCreateTopCandidate bool
-		var parentOfTopCandidate *node
+		var parentOfTopCandidate *Node
 
 		// If we still have no top candidate, just use the body as a last resort.
 		// We also have to copy the body node so it is something we can modify.
 		if topCandidate == nil || topCandidate.TagName == "BODY" {
 			// Move all of the page's children into topCandidate
-			topCandidate = doc.createElement("DIV")
+			topCandidate = doc.createElementNode("DIV")
 			neededToCreateTopCandidate = true
 			// Move everything (not just elements, also text nodes etc.) into the container
 			// so we even include text directly in the body:
-			for page.firstChild() != nil {
-				r.logger.Debug("Moving out:", "child", page.firstChild().nodeName)
-				topCandidate.appendChild(page.firstChild())
+			for page.FirstChild() != nil {
+				slog.Debug("Moving out:", "child", page.FirstChild().nodeName)
+				topCandidate.AppendChild(page.FirstChild())
 			}
 
-			page.appendChild(topCandidate)
+			page.AppendChild(topCandidate)
 
 			r.initializeNode(topCandidate)
 		} else {
 			// Find a better top candidate node if it contains (at least three) nodes which belong to `topCandidates` array
 			// and whose scores are quite closed with current `topCandidate` node.
-			var alternativeCandidateAncestors [][]*node
+			var alternativeCandidateAncestors [][]*Node
 			for i := 1; i < len(topCandidates); i++ {
 				if topCandidates[i].ReadabilityNode.ContentScore/topCandidate.ReadabilityNode.ContentScore >= 0.75 {
 					alternativeCandidateAncestors = append(alternativeCandidateAncestors, r.getNodeAncestors(topCandidates[i], 0))
@@ -1094,7 +1079,7 @@ func (r *Readability) grabArticle(page *node) *node {
 				for parentOfTopCandidate.TagName != "BODY" {
 					var listsContainingThisAncestor = 0
 					for ancestorIndex := 0; ancestorIndex < len(alternativeCandidateAncestors) && listsContainingThisAncestor < MINIMUM_TOPCANDIDATES; ancestorIndex++ {
-						includes := slices.ContainsFunc(alternativeCandidateAncestors[ancestorIndex], func(n *node) bool {
+						includes := slices.ContainsFunc(alternativeCandidateAncestors[ancestorIndex], func(n *Node) bool {
 							return n == parentOfTopCandidate
 						})
 						if includes {
@@ -1157,9 +1142,9 @@ func (r *Readability) grabArticle(page *node) *node {
 		// Now that we have the top candidate, look through its siblings for content
 		// that might also be related. Things like preambles, content split by ads
 		// that we removed, etc.
-		var articleContent = doc.createElement("DIV")
+		var articleContent = doc.createElementNode("DIV")
 		if isPaging {
-			articleContent.setId("readability-content")
+			articleContent.SetId("readability-content")
 		}
 		var siblingScoreThreshold = math.Max(10, topCandidate.ReadabilityNode.ContentScore*0.2)
 		// Keep potential top candidate's parent node to try to get text direction of it later.
@@ -1170,21 +1155,21 @@ func (r *Readability) grabArticle(page *node) *node {
 			var sibling = siblings[s]
 			var append = false
 
-			r.logger.Debug("Looking at sibling node:", "sibling", sibling.getTextContent(), "score", sibling.ReadabilityNode)
+			slog.Debug("Looking at sibling node:", "sibling", sibling.GetTextContent(), "score", sibling.ReadabilityNode)
 
 			if sibling == topCandidate {
 				append = true
 			} else {
 				var contentBonus = 0.0
 				// Give a bonus if sibling nodes and top candidates have the example same classname
-				if sibling.getClassName() == topCandidate.getClassName() && topCandidate.getClassName() != "" {
+				if sibling.GetClassName() == topCandidate.GetClassName() && topCandidate.GetClassName() != "" {
 					contentBonus += topCandidate.ReadabilityNode.ContentScore * 0.2
 				}
 
 				if sibling.ReadabilityNode != nil &&
 					(sibling.ReadabilityNode.ContentScore+contentBonus) >= siblingScoreThreshold {
 					append = true
-				} else if sibling.getNodeName() == "P" {
+				} else if sibling.GetNodeName() == "P" {
 					var linkDensity = r.getLinkDensity(sibling)
 					var nodeContent = r.getInnerText(sibling, true)
 					var nodeLength = len([]rune(nodeContent))
@@ -1198,16 +1183,16 @@ func (r *Readability) grabArticle(page *node) *node {
 			}
 
 			if append {
-				r.logger.Debug("appending", "node", sibling.getTextContent())
-				if !slices.Contains(alterToDiveExceptions, sibling.getNodeName()) {
+				slog.Debug("appending", "node", sibling.GetTextContent())
+				if !slices.Contains(alterToDiveExceptions, sibling.GetNodeName()) {
 					// We have a node that isn't a common block level element, like a form or td tag.
 					// Turn it into a div so it doesn't get filtered out later by accident.
-					r.logger.Debug("altering", "node", sibling.getTextContent())
+					slog.Debug("altering", "node", sibling.GetTextContent())
 
 					sibling = r.setNodeTag(sibling, "DIV")
 				}
 
-				articleContent.appendChild(sibling)
+				articleContent.AppendChild(sibling)
 				// Fetch children again to make it compatible
 				// with DOM parsers without live collection support.
 				siblings = parentOfTopCandidate.Children
@@ -1220,29 +1205,29 @@ func (r *Readability) grabArticle(page *node) *node {
 			}
 		}
 
-		r.logger.Debug("Article content pre-prep", "innerHTML", articleContent.getInnerHTML())
+		slog.Debug("Article content pre-prep", "innerHTML", articleContent.GetInnerHTML())
 		// So we have all of the content that we need. Now we clean it up for presentation.
 		r.prepArticle(articleContent)
-		r.logger.Debug("Article content post-prep", "innerHTML", articleContent.getInnerHTML())
+		slog.Debug("Article content post-prep", "innerHTML", articleContent.GetInnerHTML())
 
 		if neededToCreateTopCandidate {
 			// We already created a fake div thing, and there wouldn't have been any siblings left
 			// for the previous loop, so there's no point trying to create a new div, and then
 			// move all the children over. Just assign IDs and class names here. No need to append
 			// because that already happened anyway.
-			topCandidate.setId("readability-page-1")
-			topCandidate.setClassName("page")
+			topCandidate.SetId("readability-page-1")
+			topCandidate.SetClassName("page")
 		} else {
-			var div = doc.createElement("DIV")
-			div.setId("readability-page-1")
-			div.setClassName("page")
-			for articleContent.firstChild() != nil {
-				div.appendChild(articleContent.firstChild())
+			var div = doc.createElementNode("DIV")
+			div.SetId("readability-page-1")
+			div.SetClassName("page")
+			for articleContent.FirstChild() != nil {
+				div.AppendChild(articleContent.FirstChild())
 			}
-			articleContent.appendChild(div)
+			articleContent.AppendChild(div)
 		}
 
-		r.logger.Debug("Article content after paging", "innerHTML", articleContent.getInnerHTML())
+		slog.Debug("Article content after paging", "innerHTML", articleContent.GetInnerHTML())
 
 		var parseSuccessful = true
 
@@ -1254,7 +1239,7 @@ func (r *Readability) grabArticle(page *node) *node {
 		var textLength = len(r.getInnerText(articleContent, true))
 		if textLength < r.options.charThreshold {
 			parseSuccessful = false
-			page.setInnerHTML(pageCacheHtml)
+			page.SetInnerHTML(pageCacheHtml)
 
 			if r.flagIsActive(flagStripUnlikelys) {
 				r.removeFlag(flagStripUnlikelys)
@@ -1282,13 +1267,13 @@ func (r *Readability) grabArticle(page *node) *node {
 
 		if parseSuccessful {
 			// Find out text direction from ancestors of final top candidate.
-			var ancestors = []*node{parentOfTopCandidate, topCandidate}
+			var ancestors = []*Node{parentOfTopCandidate, topCandidate}
 			ancestors = append(ancestors, r.getNodeAncestors(parentOfTopCandidate, 0)...)
-			r.someNode(ancestors, func(ancestor *node) bool {
+			r.someNode(ancestors, func(ancestor *Node) bool {
 				if ancestor.TagName == "" {
 					return false
 				}
-				var articleDir = ancestor.getAttribute("dir")
+				var articleDir = ancestor.GetAttribute("dir")
 				if articleDir != "" {
 					r.articleDir = articleDir
 					return true
@@ -1315,7 +1300,7 @@ func (r *Readability) unescapeHtmlEntities(str string) string {
 	}
 	decoded, err := decodeHTML(str)
 	if err != nil {
-		r.logger.Error(err.Error())
+		slog.Error(err.Error())
 	}
 	return decoded
 }
@@ -1331,19 +1316,19 @@ type metadata struct {
 
 // Try to extract metadata from JSON-LD object.
 // For now, only Schema.org objects of type Article or its subtypes are supported.
-func (r *Readability) getJSONLD(doc *node) *metadata {
+func (r *Readability) getJSONLD(doc *Node) *metadata {
 
 	var scripts = r.getAllNodesWithTag(doc, "script")
 
 	var meta *metadata
 
 	for _, jsonLdElement := range scripts {
-		if meta == nil && jsonLdElement.getAttribute("type") == "application/ld+json" {
+		if meta == nil && jsonLdElement.GetAttribute("type") == "application/ld+json" {
 			// Strip CDATA markers if present
-			var content = cdata.ReplaceAllString(jsonLdElement.getTextContent(), "")
+			var content = cdata.ReplaceAllString(jsonLdElement.GetTextContent(), "")
 			var parsed map[string]interface{}
 			if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-				r.logger.Error("cannot unmarshal JSON-LD element content", "err", err)
+				slog.Error("cannot unmarshal JSON-LD element content", "err", err)
 				continue
 			}
 
@@ -1471,9 +1456,9 @@ func (r *Readability) getArticleMetadata(jsonld *metadata) *metadata {
 	var metaElements = r.doc.getElementsByTagName("meta")
 
 	for _, element := range metaElements {
-		var elementName = element.getAttribute("name")
-		var elementProperty = element.getAttribute("property")
-		var content = element.getAttribute("content")
+		var elementName = element.GetAttribute("name")
+		var elementProperty = element.GetAttribute("property")
+		var content = element.GetAttribute("content")
 		if content == "" {
 			continue
 		}
@@ -1560,12 +1545,12 @@ func (r *Readability) getArticleMetadata(jsonld *metadata) *metadata {
 
 // Check if node is image, or if node contains exactly only one image
 // whether as a direct child or as its descendants.
-func (r *Readability) isSingleImage(n *node) bool {
+func (r *Readability) isSingleImage(n *Node) bool {
 	if n.TagName == "IMG" {
 		return true
 	}
 
-	if len(n.Children) != 1 || strings.TrimSpace(n.getTextContent()) != "" {
+	if len(n.Children) != 1 || strings.TrimSpace(n.GetTextContent()) != "" {
 		return false
 	}
 	return r.isSingleImage(n.Children[0])
@@ -1575,7 +1560,7 @@ func (r *Readability) isSingleImage(n *node) bool {
 // <img> element. Replace the first image with the image from inside the <noscript> tag,
 // and remove the <noscript> tag. This improves the quality of the images we use on
 // some sites (e.g. Medium).
-func (r *Readability) unwrapNoscriptImages(doc *node) {
+func (r *Readability) unwrapNoscriptImages(doc *Node) {
 	// Find img without source or attributes that might contains image, and remove it.
 	// This is done to prevent a placeholder img is replaced by img from noscript in next step.
 	for _, img := range doc.getElementsByTagName("img") {
@@ -1591,16 +1576,18 @@ func (r *Readability) unwrapNoscriptImages(doc *node) {
 		})
 
 		if !containsImg {
-			img.ParentNode.removeChild(img)
+			if _, err := img.ParentNode.RemoveChild(img); err != nil {
+				slog.Error("cannot remove child", slog.String("err", err.Error()))
+			}
 		}
 	}
 
 	// Next find noscript and try to extract its image
 	for _, noscript := range doc.getElementsByTagName("noscript") {
 		// Parse content of noscript and make sure it only contains image
-		var tmp = doc.createElement("div")
-		tmp.setInnerHTML(noscript.getInnerHTML())
-		if !r.isSingleImage(tmp) {
+		var div = doc.createElementNode("div")
+		div.SetInnerHTML(noscript.GetInnerHTML())
+		if !r.isSingleImage(div) {
 			continue
 		}
 
@@ -1614,7 +1601,7 @@ func (r *Readability) unwrapNoscriptImages(doc *node) {
 				prevImg = prevElement.getElementsByTagName("img")[0]
 			}
 
-			var newImg = tmp.getElementsByTagName("img")[0]
+			var newImg = div.getElementsByTagName("img")[0]
 			for i := 0; i < len(prevImg.Attributes); i++ {
 				var attr = prevImg.Attributes[i]
 				if attr.value == "" {
@@ -1622,53 +1609,53 @@ func (r *Readability) unwrapNoscriptImages(doc *node) {
 				}
 
 				if attr.name == "src" || attr.name == "srcset" || imgExtensions.MatchString(attr.value) {
-					if newImg.getAttribute(attr.name) == attr.value {
+					if newImg.GetAttribute(attr.name) == attr.value {
 						continue
 					}
 
 					var attrName = attr.name
-					if newImg.hasAttribute(attrName) {
+					if newImg.HasAttribute(attrName) {
 						attrName = "data-old-" + attrName
 					}
-					newImg.setAttribute(attrName, attr.value)
+					newImg.SetAttribute(attrName, attr.value)
 				}
 			}
 
-			noscript.ParentNode.replaceChild(tmp.firstElementChild(), prevElement)
+			noscript.ParentNode.ReplaceChild(div.FirstElementChild(), prevElement)
 		}
 	}
 }
 
 // Removes script tags from the document.
-func (r *Readability) removeScripts(doc *node) {
+func (r *Readability) removeScripts(doc *Node) {
 	r.removeNodes(r.getAllNodesWithTag(doc, "script", "noscript"), nil)
 }
 
 // Check if this node has only whitespace and a single element with given tag
 // Returns false if the DIV node contains non-empty text nodes
 // or if it contains no element with given tag or more than 1 element.
-func (r *Readability) hasSingleTagInsideElement(element *node, tag string) bool {
+func (r *Readability) hasSingleTagInsideElement(element *Node, tag string) bool {
 	// There should be exactly 1 element child with given tag
 	if len(element.Children) != 1 || element.Children[0].TagName != tag {
 		return false
 	}
 
 	// And there should be no text nodes with real content
-	return !r.someNode(element.ChildNodes, func(n *node) bool {
+	return !r.someNode(element.ChildNodes, func(n *Node) bool {
 		return n.NodeType == textNode &&
-			hasContent.MatchString(n.getTextContent())
+			hasContent.MatchString(n.GetTextContent())
 	})
 }
 
-func (r *Readability) isElementWithoutContent(n *node) bool {
+func (r *Readability) isElementWithoutContent(n *Node) bool {
 	return n.NodeType == elementNode &&
-		len([]rune(strings.TrimSpace(n.getTextContent()))) == 0 &&
+		len([]rune(strings.TrimSpace(n.GetTextContent()))) == 0 &&
 		(len(n.Children) == 0 || len(n.Children) == len(n.getElementsByTagName("br"))+len(n.getElementsByTagName("hr")))
 }
 
 // Determine whether element has any children block level elements.
-func (r *Readability) hasChildBlockElement(element *node) bool {
-	return r.someNode(element.ChildNodes, func(n *node) bool {
+func (r *Readability) hasChildBlockElement(element *Node) bool {
+	return r.someNode(element.ChildNodes, func(n *Node) bool {
 		return slices.Contains(divToPElemns, n.TagName) ||
 			r.hasChildBlockElement(n)
 	})
@@ -1676,21 +1663,21 @@ func (r *Readability) hasChildBlockElement(element *node) bool {
 
 // Determine if a node qualifies as phrasing content.
 // see: https://developer.mozilla.org/en-US/docs/Web/Guide/HTML/Content_categories#Phrasing_content
-func (r *Readability) isPhrasingContent(n *node) bool {
+func (r *Readability) isPhrasingContent(n *Node) bool {
 	return n.NodeType == textNode || slices.Contains(phrasingElems, n.TagName) ||
 		((n.TagName == "A" || n.TagName == "DEL" || n.TagName == "INS") &&
 			r.everyNode(n.ChildNodes, r.isPhrasingContent))
 }
 
-func (r *Readability) isWhitespace(n *node) bool {
-	return (n.NodeType == textNode && len(strings.TrimSpace(n.getTextContent())) == 0) ||
+func (r *Readability) isWhitespace(n *Node) bool {
+	return (n.NodeType == textNode && len(strings.TrimSpace(n.GetTextContent())) == 0) ||
 		(n.NodeType == elementNode && n.TagName == "BR")
 }
 
 // Get the inner text of a node - cross browser compatibly.
 // This also strips out any excess whitespace to be found ('normalizeSpaces', defaults to true).
-func (r *Readability) getInnerText(e *node, normalizeSpaces bool) string {
-	var textContent = strings.TrimSpace(e.getTextContent())
+func (r *Readability) getInnerText(e *Node, normalizeSpaces bool) string {
+	var textContent = strings.TrimSpace(e.GetTextContent())
 	if normalizeSpaces {
 		return normalize.ReplaceAllString(textContent, " ")
 	}
@@ -1698,28 +1685,28 @@ func (r *Readability) getInnerText(e *node, normalizeSpaces bool) string {
 }
 
 // Get the number of times a string s appears in the node e.
-func (r *Readability) getCharCount(e *node, s string) int {
+func (r *Readability) getCharCount(e *Node, s string) int {
 	return len(strings.Split(r.getInnerText(e, true), s)) - 1
 }
 
 // Remove the style attribute on every e and under.
 // TODO: Test if getElementsByTagName(*) is faster.
-func (r *Readability) cleanStyles(e *node) {
+func (r *Readability) cleanStyles(e *Node) {
 	if e == nil || strings.ToLower(e.TagName) == "svg" {
 		return
 	}
 
 	// Remove `style` and deprecated presentational attributes
 	for i := 0; i < len(presentationalAttribute); i++ {
-		e.removeAttribute(presentationalAttribute[i])
+		e.RemoveAttribute(presentationalAttribute[i])
 	}
 
 	if slices.Contains(deprecatedSizeAttributeElems, e.TagName) {
-		e.removeAttribute("width")
-		e.removeAttribute("height")
+		e.RemoveAttribute("width")
+		e.RemoveAttribute("height")
 	}
 
-	var cur = e.firstElementChild()
+	var cur = e.FirstElementChild()
 	for cur != nil {
 		r.cleanStyles(cur)
 		cur = cur.NextElementSibling
@@ -1728,7 +1715,7 @@ func (r *Readability) cleanStyles(e *node) {
 
 // Get the density of links as a percentage of the content
 // This is the amount of text that is inside a link divided by the total text in the node.
-func (r *Readability) getLinkDensity(element *node) float64 {
+func (r *Readability) getLinkDensity(element *Node) float64 {
 	var textLength = len([]rune(r.getInnerText(element, true)))
 	if textLength == 0 {
 		return 0
@@ -1738,7 +1725,7 @@ func (r *Readability) getLinkDensity(element *node) float64 {
 
 	// XXX implement _reduceNodeList?
 	for _, linkNode := range element.getElementsByTagName("a") {
-		var href = linkNode.getAttribute("href")
+		var href = linkNode.GetAttribute("href")
 		var coefficient = 1.0
 		if href != "" && hashUrl.MatchString(href) {
 			coefficient = 0.3
@@ -1751,7 +1738,7 @@ func (r *Readability) getLinkDensity(element *node) float64 {
 
 // Get an elements class/id weight. Uses regular expressions to tell if this
 // element looks good or bad.
-func (r *Readability) getClassWeight(e *node) float64 {
+func (r *Readability) getClassWeight(e *Node) float64 {
 	if !r.flagIsActive(flagWeightClasses) {
 		return 0
 	}
@@ -1759,21 +1746,21 @@ func (r *Readability) getClassWeight(e *node) float64 {
 	var weight = 0
 
 	// Look for a special classname
-	if e.getClassName() != "" {
-		if negative.MatchString(e.getClassName()) {
+	if e.GetClassName() != "" {
+		if negative.MatchString(e.GetClassName()) {
 			weight -= 25
 		}
-		if positive.MatchString(e.getClassName()) {
+		if positive.MatchString(e.GetClassName()) {
 			weight += 25
 		}
 	}
 
 	// Look for a special ID
-	if e.getId() != "" {
-		if negative.MatchString(e.getId()) {
+	if e.GetId() != "" {
+		if negative.MatchString(e.GetId()) {
 			weight -= 25
 		}
-		if positive.MatchString(e.getId()) {
+		if positive.MatchString(e.GetId()) {
 			weight += 25
 		}
 	}
@@ -1783,11 +1770,11 @@ func (r *Readability) getClassWeight(e *node) float64 {
 
 // Clean a node of all elements of type "tag".
 // (Unless it's a youtube/vimeo video. People love movies.)
-func (r *Readability) clean(e *node, tag string) {
+func (r *Readability) clean(e *Node, tag string) {
 
 	var isEmbed = slices.Contains([]string{"object", "embed", "iframe"}, tag)
 
-	r.removeNodes(r.getAllNodesWithTag(e, tag), func(element *node) bool {
+	r.removeNodes(r.getAllNodesWithTag(e, tag), func(element *Node) bool {
 		// Allow youtube and vimeo videos through as people usually want to see those.
 		if isEmbed {
 			// First, check the elements attributes to see if any of them contain youtube or vimeo
@@ -1798,7 +1785,7 @@ func (r *Readability) clean(e *node, tag string) {
 			}
 
 			// For embed with <object> tag, check inner HTML as well.
-			if element.TagName == "object" && r.options.allowedVideoRegex.MatchString(element.getInnerHTML()) {
+			if element.TagName == "object" && r.options.allowedVideoRegex.MatchString(element.GetInnerHTML()) {
 				return false
 			}
 		}
@@ -1808,7 +1795,7 @@ func (r *Readability) clean(e *node, tag string) {
 
 // Check if a given node has one of its ancestor tag name matching the
 // provided one.
-func (r *Readability) hasAncestorTag(n *node, tagName string, maxDepth int, filterFn func(*node) bool) bool {
+func (r *Readability) hasAncestorTag(n *Node, tagName string, maxDepth int, filterFn func(*Node) bool) bool {
 	tagName = strings.ToUpper(tagName)
 	var depth = 0
 	for n.ParentNode != nil {
@@ -1825,17 +1812,17 @@ func (r *Readability) hasAncestorTag(n *node, tagName string, maxDepth int, filt
 }
 
 // Return an object indicating how many rows and columns this table has.
-func (r *Readability) getRowAndColumnCount(table *node) (int, int) {
+func (r *Readability) getRowAndColumnCount(table *Node) (int, int) {
 	var rows = 0
 	var columns = 0
 	var trs = table.getElementsByTagName("tr")
 	for i := 0; i < len(trs); i++ {
-		var rowspan = trs[i].getAttribute("rowspan")
+		var rowspan = trs[i].GetAttribute("rowspan")
 		var rs int
 		if rowspan != "" {
 			num, err := strconv.Atoi(rowspan)
 			if err != nil {
-				r.logger.Error(err.Error())
+				slog.Error(err.Error())
 			}
 			rs = num
 		}
@@ -1849,12 +1836,12 @@ func (r *Readability) getRowAndColumnCount(table *node) (int, int) {
 		var columnsInThisRow = 0
 		var cells = trs[i].getElementsByTagName("td")
 		for j := 0; j < len(cells); j++ {
-			var colspan = cells[j].getAttribute("colspan")
+			var colspan = cells[j].GetAttribute("colspan")
 			var cs int
 			if colspan != "" {
 				num, err := strconv.Atoi(colspan)
 				if err != nil {
-					r.logger.Error(err.Error())
+					slog.Error(err.Error())
 				}
 				cs = num
 			}
@@ -1872,24 +1859,24 @@ func (r *Readability) getRowAndColumnCount(table *node) (int, int) {
 // Look for 'data' (as opposed to 'layout') tables, for which we use
 // similar checks as
 // https://searchfox.org/mozilla-central/rev/f82d5c549f046cb64ce5602bfd894b7ae807c8f8/accessible/generic/TableAccessible.cpp#19
-func (r *Readability) markDataTables(root *node) {
+func (r *Readability) markDataTables(root *Node) {
 
 	var tables = root.getElementsByTagName("table")
 	for i := 0; i < len(tables); i++ {
 		var table = tables[i]
-		var role = table.getAttribute("role")
+		var role = table.GetAttribute("role")
 		if role == "presentation" {
 			table.ReadabilityDataTable = &readabilityDataTable{value: false}
 			continue
 		}
 
-		var datatable = table.getAttribute("datatable")
+		var datatable = table.GetAttribute("datatable")
 		if datatable == "0" {
 			table.ReadabilityDataTable = &readabilityDataTable{value: false}
 			continue
 		}
 
-		var summary = table.getAttribute("summary")
+		var summary = table.GetAttribute("summary")
 		if summary != "" {
 			table.ReadabilityDataTable = &readabilityDataTable{value: true}
 			continue
@@ -1907,7 +1894,7 @@ func (r *Readability) markDataTables(root *node) {
 		}
 
 		if slices.ContainsFunc(dataTableDescendants, descendantExists) {
-			r.logger.Debug("Data table because found data-y descendant")
+			slog.Debug("Data table because found data-y descendant")
 			table.ReadabilityDataTable = &readabilityDataTable{value: true}
 			continue
 		}
@@ -1930,14 +1917,15 @@ func (r *Readability) markDataTables(root *node) {
 }
 
 // convert images and figures that have properties like data-src into images that can be loaded without JS
-func (r *Readability) fixLazyImages(root *node) {
+func (r *Readability) fixLazyImages(root *Node) {
 
 	for _, elem := range r.getAllNodesWithTag(root, "img", "picture", "figure") {
 		// In some sites (e.g. Kotaku), they put 1px square image as base64 data uri in the src attribute.
 		// So, here we check if the data uri is too short, just might as well remove it.
-		if elem.getSrc() != "" && b64DataUrl.MatchString(elem.getSrc()) {
+
+		if elem.GetSrc() != "" && b64DataUrl.MatchString(elem.GetSrc()) {
 			// Make sure it's not SVG, because SVG can have a meaningful image in under 133 bytes.
-			var parts = b64DataUrl.FindAllStringSubmatch(elem.getSrc(), -1)
+			var parts = b64DataUrl.FindAllStringSubmatch(elem.GetSrc(), -1)
 			if parts[0][1] == "image/svg+xml" {
 				continue
 			}
@@ -1960,16 +1948,16 @@ func (r *Readability) fixLazyImages(root *node) {
 			// Here we assume if image is less than 100 bytes (or 133B after encoded to base64)
 			// it will be too small, therefore it might be placeholder image.
 			if srcCouldBeRemoved {
-				var b64starts = base64Starts.FindStringIndex(elem.getSrc())[0] + 7
-				var b64length = len([]rune(elem.getSrc())) - b64starts
+				var b64starts = base64Starts.FindStringIndex(elem.GetSrc())[0] + 7
+				var b64length = len([]rune(elem.GetSrc())) - b64starts
 				if b64length < 133 {
-					elem.removeAttribute("src")
+					elem.RemoveAttribute("src")
 				}
 			}
 		}
 
 		// also check for "null" to work around https://github.com/jsdom/jsdom/issues/2580
-		if (elem.getSrc() != "" || (elem.getSrcset() != "" && elem.getSrcset() != "null")) && !strings.Contains(strings.ToLower(elem.getClassName()), "lazy") {
+		if (elem.GetSrc() != "" || (elem.GetSrcset() != "" && elem.GetSrcset() != "null")) && !strings.Contains(strings.ToLower(elem.GetClassName()), "lazy") {
 			continue
 		}
 
@@ -1988,20 +1976,20 @@ func (r *Readability) fixLazyImages(root *node) {
 			if copyTo != "" {
 				//if this is an img or picture, set the attribute directly
 				if elem.TagName == "IMG" || elem.TagName == "PICTURE" {
-					elem.setAttribute(copyTo, attr.value)
+					elem.SetAttribute(copyTo, attr.value)
 				} else if elem.TagName == "FIGURE" && len(r.getAllNodesWithTag(elem, "img", "picture")) == 0 {
 					//if the item is a <figure> that does not contain an image or picture, create one and place it inside the figure
 					//see the nytimes-3 testcase for an example
-					var img = r.doc.createElement("img")
-					img.setAttribute(copyTo, attr.value)
-					elem.appendChild(img)
+					var img = r.doc.createElementNode("img")
+					img.SetAttribute(copyTo, attr.value)
+					elem.AppendChild(img)
 				}
 			}
 		}
 	}
 }
 
-func (r *Readability) getTextDensity(e *node, tags ...string) float64 {
+func (r *Readability) getTextDensity(e *Node, tags ...string) float64 {
 	var textLength = len(r.getInnerText(e, true))
 	if textLength == 0 {
 		return 0
@@ -2017,7 +2005,7 @@ func (r *Readability) getTextDensity(e *node, tags ...string) float64 {
 
 // Clean an element of all tags of type "tag" if they look fishy.
 // "Fishy" is an algorithm based on content length, classnames, link density, number of images & embeds, etc.
-func (r *Readability) cleanConditionally(e *node, tag string) {
+func (r *Readability) cleanConditionally(e *Node, tag string) {
 	if !r.flagIsActive(flagCleanConditionally) {
 		return
 	}
@@ -2028,9 +2016,9 @@ func (r *Readability) cleanConditionally(e *node, tag string) {
 	//
 	// TODO: Consider taking into account original contentScore here.
 
-	r.removeNodes(r.getAllNodesWithTag(e, tag), func(n *node) bool {
+	r.removeNodes(r.getAllNodesWithTag(e, tag), func(n *Node) bool {
 		// First check if this node IS data table, in which case don't remove it.
-		var isDataTable = func(t *node) bool {
+		var isDataTable = func(t *Node) bool {
 			return t.ReadabilityDataTable != nil && t.ReadabilityDataTable.value
 		}
 
@@ -2059,7 +2047,7 @@ func (r *Readability) cleanConditionally(e *node, tag string) {
 
 		var weight = r.getClassWeight(n)
 
-		r.logger.Debug("Cleaning Conditionally", "node", n)
+		slog.Debug("Cleaning Conditionally", "node", n)
 
 		var contentScore = 0.0
 
@@ -2089,7 +2077,7 @@ func (r *Readability) cleanConditionally(e *node, tag string) {
 				}
 
 				// For embed with <object> tag, check inner HTML as well.
-				if embeds[i].TagName == "object" && r.options.allowedVideoRegex != nil && r.options.allowedVideoRegex.MatchString(embeds[i].getInnerHTML()) {
+				if embeds[i].TagName == "object" && r.options.allowedVideoRegex != nil && r.options.allowedVideoRegex.MatchString(embeds[i].GetInnerHTML()) {
 					return false
 				}
 
@@ -2129,11 +2117,11 @@ func (r *Readability) cleanConditionally(e *node, tag string) {
 }
 
 // Clean out elements that match the specified conditions
-func (r *Readability) cleanMatchedNodes(e *node, filter func(*node, string) bool) {
+func (r *Readability) cleanMatchedNodes(e *Node, filter func(*Node, string) bool) {
 	var endOfSearchMarkerNode = r.getNextNode(e, true)
 	var next = r.getNextNode(e, false)
 	for next != nil && next != endOfSearchMarkerNode {
-		if filter(next, next.getClassName()+" "+next.getId()) {
+		if filter(next, next.GetClassName()+" "+next.GetId()) {
 			next = r.removeAndGetNext(next)
 		} else {
 			next = r.getNextNode(next, false)
@@ -2142,12 +2130,12 @@ func (r *Readability) cleanMatchedNodes(e *node, filter func(*node, string) bool
 }
 
 // Clean out spurious headers from an Element.
-func (r *Readability) cleanHeaders(n *node) {
+func (r *Readability) cleanHeaders(n *Node) {
 	var headingNodes = r.getAllNodesWithTag(n, "h1", "h2")
-	r.removeNodes(headingNodes, func(nn *node) bool {
+	r.removeNodes(headingNodes, func(nn *Node) bool {
 		var shouldRemove = r.getClassWeight(nn) < 0
 		if shouldRemove {
-			r.logger.Debug("Removing header with low class weight", "node", nn)
+			slog.Debug("Removing header with low class weight", "node", nn)
 		}
 		return shouldRemove
 	})
@@ -2155,12 +2143,12 @@ func (r *Readability) cleanHeaders(n *node) {
 
 // Check if this node is an H1 or H2 element whose content is mostly
 // the same as the article title.
-func (r *Readability) headerDuplicatesTitle(n *node) bool {
+func (r *Readability) headerDuplicatesTitle(n *Node) bool {
 	if n.TagName != "H1" && n.TagName != "H2" {
 		return false
 	}
 	var heading = r.getInnerText(n, false)
-	r.logger.Debug("Evaluating similarity of header", "heading", heading, "articleTitle", r.articleTitle)
+	slog.Debug("Evaluating similarity of header", "heading", heading, "articleTitle", r.articleTitle)
 	return r.textSimilarity(r.articleTitle, heading) > 0.75
 }
 
@@ -2172,12 +2160,12 @@ func (r *Readability) removeFlag(flag int) {
 	r.flags = r.flags & ^flag
 }
 
-func isProbablyVisible(n *node) bool {
+func isProbablyVisible(n *Node) bool {
 	// Have to null-check node.style and node.className.indexOf to deal with SVG and MathML nodes.
 	return (n.style == nil || n.style.getStyle("display") != "none") &&
 		(n.style == nil || n.style.getStyle("visibility") != "hidden") &&
-		!n.hasAttribute("hidden") &&
-		(!n.hasAttribute("aria-hidden") || n.getAttribute("aria-hidden") != "true" || (n.getClassName() != "" && strings.Contains(n.getClassName(), "fallback-image")))
+		!n.HasAttribute("hidden") &&
+		(!n.HasAttribute("aria-hidden") || n.GetAttribute("aria-hidden") != "true" || (n.GetClassName() != "" && strings.Contains(n.GetClassName(), "fallback-image")))
 }
 
 // Runs readability.
@@ -2218,7 +2206,7 @@ func (r *Readability) Parse() (*Result, error) {
 		return nil, fmt.Errorf("cannot grab article")
 	}
 
-	r.logger.Debug("grabbed", "articleContent.innerHTML", articleContent.getInnerHTML())
+	slog.Debug("grabbed", "articleContent.innerHTML", articleContent.GetInnerHTML())
 
 	r.postProcessContent(articleContent)
 
@@ -2228,17 +2216,25 @@ func (r *Readability) Parse() (*Result, error) {
 	if metadata.excerpt == "" {
 		var paragraphs = articleContent.getElementsByTagName("p")
 		if len(paragraphs) > 0 {
-			metadata.excerpt = strings.TrimSpace(paragraphs[0].getTextContent())
+			metadata.excerpt = strings.TrimSpace(paragraphs[0].GetTextContent())
 		}
 	}
 
-	var textContent = articleContent.getTextContent()
+	htmlContent := r.options.serializer(articleContent)
+
+	var textContent string
+	if r.options.html2text != nil {
+		textContent = r.options.html2text(htmlContent)
+	} else {
+		textContent = articleContent.GetTextContent()
+	}
+
 	return &Result{
 		Title:         r.articleTitle,
 		Byline:        anyOf(metadata.byline, r.articleByline),
 		Dir:           r.articleDir,
 		Lang:          r.articleLang,
-		Content:       r.options.serializer(articleContent),
+		HTMLContent:   htmlContent,
 		TextContent:   textContent,
 		Length:        len([]rune(textContent)),
 		Excerpt:       metadata.excerpt,

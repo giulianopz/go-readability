@@ -3,7 +3,6 @@ package readability
 import (
 	"bytes"
 	"slices"
-	"strings"
 
 	"github.com/andybalholm/cascadia"
 	"golang.org/x/net/html"
@@ -15,22 +14,6 @@ func indexOf[T any](el *T, a []*T) int {
 	})
 }
 
-func indexOfFrom(str, sub string, from int) int {
-	// see: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/indexOf
-	max := len(str) - 1
-	if from > max {
-		return -1
-	}
-	if from < 0 {
-		from = 0
-	}
-	idx := strings.Index(str[from:], sub)
-	if idx == -1 {
-		return -1
-	}
-	return idx + from
-}
-
 func delete[T any](idx int, a []*T) []*T {
 	copy(a[idx:], a[idx+1:])
 	a[len(a)-1] = nil
@@ -38,8 +21,8 @@ func delete[T any](idx int, a []*T) []*T {
 	return a
 }
 
-func insert(newNode *node, idx int, nodes []*node) []*node {
-	nodes = append(nodes[:idx], append([]*node{newNode}, nodes[idx:]...)...)
+func insert(newNode *Node, idx int, nodes []*Node) []*Node {
+	nodes = append(nodes[:idx], append([]*Node{newNode}, nodes[idx:]...)...)
 	return nodes
 }
 

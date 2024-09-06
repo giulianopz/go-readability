@@ -1,20 +1,19 @@
 package readability
 
 import (
-	"log/slog"
 	"regexp"
 
 	"golang.org/x/net/html"
 )
 
 type Options struct {
-	logLevel          slog.Level
 	maxElemsToParse   int
 	nbTopCandidates   int
 	charThreshold     int
 	classesToPreserve []string
 	keepClasses       bool
-	serializer        func(*node) string
+	serializer        func(doc *Node) string
+	html2text         func(htmlSrc string) string
 	disableJSONLD     bool
 	allowedVideoRegex *regexp.Regexp
 	minContentLength  int
@@ -26,24 +25,17 @@ type Option func(*Options)
 
 func defaultOpts() *Options {
 	return &Options{
-		logLevel:          slog.LevelError,
 		maxElemsToParse:   defaultMaxElemsToParse,
 		nbTopCandidates:   defaultNTopCandidates,
 		charThreshold:     defaultCharThreshold,
 		classesToPreserve: classesToPreserve,
 		allowedVideoRegex: videos,
-		serializer: func(n *node) string {
-			return n.getInnerHTML()
+		serializer: func(n *Node) string {
+			return n.GetInnerHTML()
 		},
 		minScore:          20,
 		minContentLength:  140,
 		visibilityChecker: isNodeVisible,
-	}
-}
-
-func LogLevel(l slog.Level) Option {
-	return func(o *Options) {
-		o.logLevel = l
 	}
 }
 
@@ -77,9 +69,15 @@ func KeepClasses(b bool) Option {
 	}
 }
 
-func Serializer(f func(*node) string) Option {
+func Serializer(f func(*Node) string) Option {
 	return func(o *Options) {
 		o.serializer = f
+	}
+}
+
+func Html2Text(f func(string) string) Option {
+	return func(o *Options) {
+		o.html2text = f
 	}
 }
 

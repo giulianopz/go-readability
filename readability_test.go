@@ -110,9 +110,9 @@ func TestParse(t *testing.T) {
 
 			t.Run("should extract expected content", func(t *testing.T) {
 
-				var actualDOM = domGenerationFn(prettyPrint(result.Content), uri)
+				var actualDOM = domGenerationFn(prettyPrint(result.HTMLContent), uri)
 				var expectedDOM = domGenerationFn(string(prettyPrint(string(testPage.expectedContent))), uri)
-				failed := traverseDOM(func(actualNode, expectedNode *node) bool {
+				failed := traverseDOM(func(actualNode, expectedNode *Node) bool {
 
 					if actualNode != nil && expectedNode != nil {
 
@@ -124,8 +124,8 @@ func TestParse(t *testing.T) {
 						}
 						// Compare text for text nodes:
 						if actualNode.NodeType == textNode {
-							var actualText = htmlTransform(actualNode.getTextContent())
-							var expectedText = htmlTransform(expectedNode.getTextContent())
+							var actualText = htmlTransform(actualNode.GetTextContent())
+							var expectedText = htmlTransform(expectedNode.GetTextContent())
 							if diff := cmp.Diff(expectedText, actualText); diff != "" {
 								t.Errorf("diff=%s\n", diff)
 								return false
@@ -137,19 +137,22 @@ func TestParse(t *testing.T) {
 							var desc = "node " + nodeStr(actualNode) + " attributes (" + actualNodeDesc + ") should match (" + expectedNodeDesc + ") "
 							if len(actualNode.Attributes) != len(expectedNode.Attributes) {
 								t.Errorf("got %d want %d; desc=%s", len(actualNode.Attributes), len(expectedNode.Attributes), desc)
+								return false
 							}
 							for i := 0; i < len(actualNode.Attributes); i++ {
 								var attr = actualNode.Attributes[i].getName()
-								var actualValue = actualNode.getAttribute(attr)
-								var expectedValue = expectedNode.getAttribute(attr)
+								var actualValue = actualNode.GetAttribute(attr)
+								var expectedValue = expectedNode.GetAttribute(attr)
 								if diff := cmp.Diff(expectedValue, actualValue); diff != "" {
 									t.Errorf("diff=%s\n", diff)
+									return false
 								}
 							}
 						}
 					} else {
 						if nodeStr(actualNode) != nodeStr(expectedNode) {
 							t.Error("Should have a node from both DOMs")
+							return false
 						}
 						return false
 					}
@@ -157,7 +160,7 @@ func TestParse(t *testing.T) {
 				}, expectedDOM, actualDOM)
 
 				if failed {
-					os.WriteFile(testPage.dir+"/failed.html", []byte(result.Content), os.ModePerm)
+					_ = os.WriteFile(testPage.dir+"/failed.html", []byte(result.HTMLContent), os.ModePerm)
 				}
 			})
 
@@ -200,31 +203,31 @@ func prettyPrint(html string) string {
 	return gohtml.Format(html)
 }
 
-func domGenerationFn(source, uri string) *node {
+func domGenerationFn(source, uri string) *Node {
 	return newDOMParser().parse(source, uri)
 }
 
-func nodeStr(n *node) string {
+func nodeStr(n *Node) string {
 	if n == nil {
 		return "(no node)"
 	}
 	if n.NodeType == textNode {
-		return "#text(" + htmlTransform(n.getTextContent()) + ")"
+		return "#text(" + htmlTransform(n.GetTextContent()) + ")"
 	}
 	if n.NodeType != elementNode {
-		return "some other node type: " + strconv.Itoa(int(n.NodeType)) + " with data " + n.getInnerHTML()
+		return "some other node type: " + strconv.Itoa(int(n.NodeType)) + " with data " + n.GetInnerHTML()
 	}
 	var rv = n.LocalName
-	if n.getId() != "" {
-		rv += "#" + n.getId()
+	if n.GetId() != "" {
+		rv += "#" + n.GetId()
 	}
-	if n.getClassName() != "" {
-		rv += ".(" + n.getClassName() + ")"
+	if n.GetClassName() != "" {
+		rv += ".(" + n.GetClassName() + ")"
 	}
 	return rv
 }
 
-func attributesForNode(n *node) string {
+func attributesForNode(n *Node) string {
 	var attrs []string
 	for _, a := range n.Attributes {
 		attrs = append(attrs, a.getName()+"="+a.getValue())
@@ -232,8 +235,8 @@ func attributesForNode(n *node) string {
 	return strings.Join(attrs, ",")
 }
 
-func inOrderTraverse(fromNode *node) *node {
-	fc := fromNode.firstChild()
+func inOrderTraverse(fromNode *Node) *Node {
+	fc := fromNode.FirstChild()
 	if fc != nil {
 		return fc
 	}
@@ -246,15 +249,15 @@ func inOrderTraverse(fromNode *node) *node {
 	return nil
 }
 
-func inOrderIgnoreEmptyTextNodes(fromNode *node) *node {
+func inOrderIgnoreEmptyTextNodes(fromNode *Node) *Node {
 	fromNode = inOrderTraverse(fromNode)
-	for fromNode != nil && fromNode.NodeType == textNode && strings.TrimSpace(fromNode.getTextContent()) == "" {
+	for fromNode != nil && fromNode.NodeType == textNode && strings.TrimSpace(fromNode.GetTextContent()) == "" {
 		fromNode = inOrderTraverse(fromNode)
 	}
 	return fromNode
 }
 
-func traverseDOM(callback func(*node, *node) bool, expectedDOM, actualDOM *node) bool {
+func traverseDOM(callback func(*Node, *Node) bool, expectedDOM, actualDOM *Node) bool {
 	var actualNode = actualDOM.DocumentElement
 	if actualNode == nil {
 		actualNode = actualDOM.ChildNodes[0]

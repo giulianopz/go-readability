@@ -28,7 +28,6 @@
 package readability
 
 import (
-	"bytes"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -310,7 +309,7 @@ var voidElems = map[string]bool{
 	"wbr":     true,
 }
 
-var whitespaces = []rune{' ', '\t', '\n', '\r'}
+//var whitespaces = []rune{' ', '\t', '\n', '\r'}
 
 // See https://developer.mozilla.org/en-US/docs/Web/API/Node/nodeType
 const (
@@ -329,16 +328,16 @@ const (
 	notationNode
 )
 
-func (n *node) getElementsByTagName(tag string) []*node {
+func (n *Node) getElementsByTagName(tag string) []*Node {
 
 	tag = strings.ToUpper(tag)
-	var elems []*node
+	var elems []*Node
 
 	var allTags = tag == "*"
 
-	var getElems func(from *node)
+	var getElems func(from *Node)
 
-	getElems = func(from *node) {
+	getElems = func(from *Node) {
 		for i := 0; i < len(from.Children); i++ {
 			child := from.Children[i]
 			if allTags || child.TagName == tag {
@@ -353,7 +352,7 @@ func (n *node) getElementsByTagName(tag string) []*node {
 	return elems
 }
 
-type node struct {
+type Node struct {
 	NodeType    uint
 	LocalName   string
 	nodeName    string
@@ -363,22 +362,22 @@ type node struct {
 	Attributes  []*attribute
 	style       *style
 	// relations
-	ParentNode             *node
-	NextSibling            *node
-	PreviousSibling        *node
-	PreviousElementSibling *node
-	NextElementSibling     *node
-	ChildNodes             []*node
-	Children               []*node
+	ParentNode             *Node
+	NextSibling            *Node
+	PreviousSibling        *Node
+	PreviousElementSibling *Node
+	NextElementSibling     *Node
+	ChildNodes             []*Node
+	Children               []*Node
 	// element
 	matchingTag string
 	// document
 	DocumentURI          string
 	baseURI              string
 	title                string
-	head                 *node
-	Body                 *node
-	DocumentElement      *node
+	head                 *Node
+	Body                 *Node
+	DocumentElement      *Node
 	ReadabilityNode      *readabilityNode
 	ReadabilityDataTable *readabilityDataTable
 }
@@ -391,40 +390,42 @@ type readabilityNode struct {
 	ContentScore float64
 }
 
-func (n *node) firstChild() *node {
+func (n *Node) FirstChild() *Node {
 	if len(n.ChildNodes) == 0 {
 		return nil
 	}
 	return n.ChildNodes[0]
 }
 
-func (n *node) firstElementChild() *node {
+func (n *Node) FirstElementChild() *Node {
 	if len(n.Children) == 0 {
 		return nil
 	}
 	return n.Children[0]
 }
 
-func (n *node) lastChild() *node {
+func (n *Node) LastChild() *Node {
 	if len(n.ChildNodes) == 0 {
 		return nil
 	}
 	return n.ChildNodes[len(n.ChildNodes)-1]
 }
 
-func (n *node) lastElementChild() *node {
+/* func (n *node) lastElementChild() *node {
 	if len(n.ChildNodes) == 0 {
 		return nil
 	}
 	return n.Children[len(n.Children)-1]
-}
+} */
 
-func (n *node) appendChild(child *node) {
+func (n *Node) AppendChild(child *Node) {
 	if child.ParentNode != nil {
-		child.ParentNode.removeChild(child)
+		if _, err := child.ParentNode.RemoveChild(child); err != nil {
+			slog.Error("cannot remove child", slog.String("err", err.Error()))
+		}
 	}
 
-	last := n.lastChild()
+	last := n.LastChild()
 	if last != nil {
 		last.NextSibling = child
 	}
@@ -444,7 +445,7 @@ func (n *node) appendChild(child *node) {
 	child.ParentNode = n
 }
 
-func (n *node) removeChild(child *node) (*node, error) {
+func (n *Node) RemoveChild(child *Node) (*Node, error) {
 	childNodes := n.ChildNodes
 	childIndex := indexOf(child, childNodes)
 	if childIndex == -1 {
@@ -480,7 +481,7 @@ func (n *node) removeChild(child *node) (*node, error) {
 	}
 }
 
-func (n *node) replaceChild(newNode, oldNode *node) *node {
+func (n *Node) ReplaceChild(newNode, oldNode *Node) *Node {
 	childNodes := n.ChildNodes
 	childIndex := indexOf(oldNode, childNodes)
 	if childIndex == -1 {
@@ -488,7 +489,9 @@ func (n *node) replaceChild(newNode, oldNode *node) *node {
 	} else {
 		// This will take care of updating the new node if it was somewhere else before:
 		if newNode.ParentNode != nil {
-			newNode.ParentNode.removeChild(newNode)
+			if _, err := newNode.ParentNode.RemoveChild(newNode); err != nil {
+				slog.Error("cannot remove child", slog.String("err", err.Error()))
+			}
 		}
 		childNodes[childIndex] = newNode
 
@@ -520,7 +523,7 @@ func (n *node) replaceChild(newNode, oldNode *node) *node {
 				n.Children[indexOf(oldNode, n.Children)] = newNode
 			} else {
 				// Hard way:
-				newNode.PreviousElementSibling = func(childIndex int, childNodes []*node) *node {
+				newNode.PreviousElementSibling = func(childIndex int, childNodes []*Node) *Node {
 					for i := childIndex - 1; i >= 0; i-- {
 						if childNodes[i].NodeType == elementNode {
 							return childNodes[i]
@@ -531,7 +534,7 @@ func (n *node) replaceChild(newNode, oldNode *node) *node {
 				if newNode.PreviousElementSibling != nil {
 					newNode.NextElementSibling = newNode.PreviousElementSibling.NextElementSibling
 				} else {
-					newNode.NextElementSibling = func(childIndex int, childNodes []*node) *node {
+					newNode.NextElementSibling = func(childIndex int, childNodes []*Node) *Node {
 						for i := childIndex + 1; i < len(childNodes); i++ {
 							if childNodes[i].NodeType == elementNode {
 								return childNodes[i]
@@ -606,15 +609,16 @@ func (a *attribute) getEncodedValue() string {
 	return encodeHTML(a.value)
 }
 
+/*
 func newComment() *node {
 	return &node{
 		nodeName: "#comment",
 		NodeType: commentNode,
 	}
-}
+} */
 
-func newText() *node {
-	return &node{
+func newText() *Node {
+	return &Node{
 		nodeName:    "#text",
 		NodeType:    textNode,
 		innerHTML:   "",
@@ -622,9 +626,9 @@ func newText() *node {
 	}
 }
 
-func (t *node) getTextContentFromTextNode() string {
+func (t *Node) getTextContentFromTextNode() string {
 	if t.textContent == "" {
-		decoded, err := decodeHTML(t.getInnerHTML())
+		decoded, err := decodeHTML(t.GetInnerHTML())
 		if err != nil {
 			slog.Error("cannot decode inner html", "err", err)
 			return ""
@@ -634,38 +638,38 @@ func (t *node) getTextContentFromTextNode() string {
 	return t.textContent
 }
 
-func (t *node) getInnerHTMLFromTextNode() string {
+func (t *Node) getInnerHTMLFromTextNode() string {
 	if t.innerHTML == "" {
-		t.innerHTML = encodeTextContentHTML(t.getTextContent())
+		t.innerHTML = encodeTextContentHTML(t.GetTextContent())
 	}
 	return t.innerHTML
 }
 
-func (t *node) setInnerHTMLFromTextNode(newHTML string) {
+func (t *Node) setInnerHTMLFromTextNode(newHTML string) {
 	t.innerHTML = newHTML
 	t.textContent = ""
 }
 
-func (t *node) setTextContentFromTextNode(newText string) {
+func (t *Node) setTextContentFromTextNode(newText string) {
 	t.textContent = newText
 	t.innerHTML = ""
 }
 
-func newDocument(url string) *node {
-	return &node{
+func newDocument(url string) *Node {
+	return &Node{
 		DocumentURI: url,
 		nodeName:    "#document",
 		NodeType:    documentNode,
 	}
 }
 
-func (n *node) getElementById(id string) *node {
+func (n *Node) GetElementById(id string) *Node {
 
-	var getElem func(from *node) *node
+	var getElem func(from *Node) *Node
 
-	getElem = func(from *node) *node {
+	getElem = func(from *Node) *Node {
 		var length = len(from.Children)
-		if from.getId() == id {
+		if from.GetId() == id {
 			return from
 		}
 		for i := 0; i < length; i++ {
@@ -680,22 +684,22 @@ func (n *node) getElementById(id string) *node {
 	return getElem(n)
 }
 
-func (d *node) createElement(tag string) *node {
+func (d *Node) createElementNode(tag string) *Node {
 	return newElement(tag)
 }
 
-func (d *node) createTextNode(text string) *node {
+func (d *Node) createTextNode(text string) *Node {
 	node := newText()
-	node.setTextContent(text)
+	node.SetTextContent(text)
 	return node
 }
 
-func (d *node) getBaseURI() string {
+func (d *Node) getBaseURI() string {
 	if d.baseURI == "" {
 		d.baseURI = d.DocumentURI
 		baseElements := d.getElementsByTagName("base")
 		if len(baseElements) != 0 {
-			href := baseElements[0].getAttribute("href")
+			href := baseElements[0].GetAttribute("href")
 			if href != "" {
 				base, err := url.Parse(d.baseURI)
 				if err != nil {
@@ -715,8 +719,8 @@ func (d *node) getBaseURI() string {
 	return d.baseURI
 }
 
-func newElement(tag string) *node {
-	n := &node{
+func newElement(tag string) *Node {
+	n := &Node{
 		// We use this to find the closing tag.
 		matchingTag: tag,
 		NodeType:    elementNode,
@@ -735,7 +739,7 @@ func newElement(tag string) *node {
 	return n
 }
 
-func (n *node) getAttribute(name string) string {
+func (n *Node) GetAttribute(name string) string {
 	var i = len(n.Attributes) - 1
 	for i >= 0 {
 		var attr = n.Attributes[i]
@@ -747,15 +751,15 @@ func (n *node) getAttribute(name string) string {
 	return ""
 }
 
-func (n *node) getAttributeByIndex(idx int) *attribute {
+func (n *Node) GetAttributeByIndex(idx int) *attribute {
 	return n.Attributes[idx]
 }
 
-func (n *node) getAttributeLen() int {
+func (n *Node) GetAttributeLen() int {
 	return len(n.Attributes)
 }
 
-func (n *node) setAttribute(name, value string) {
+func (n *Node) SetAttribute(name, value string) {
 	for _, attr := range n.Attributes {
 		if attr.name == name {
 			attr.setValue(value)
@@ -765,7 +769,7 @@ func (n *node) setAttribute(name, value string) {
 	n.Attributes = append(n.Attributes, newAttribute(name, value))
 }
 
-func (n *node) removeAttribute(name string) {
+func (n *Node) RemoveAttribute(name string) {
 	for idx, attr := range n.Attributes {
 		if attr.name == name {
 			n.Attributes = delete(idx, n.Attributes)
@@ -774,19 +778,19 @@ func (n *node) removeAttribute(name string) {
 	}
 }
 
-func (n *node) hasAttribute(name string) bool {
+func (n *Node) HasAttribute(name string) bool {
 	return slices.ContainsFunc[[]*attribute, *attribute](n.Attributes, func(a *attribute) bool {
 		return a.name == name
 	})
 }
 
 type style struct {
-	*node
+	*Node
 }
 
-func newStyle(n *node) *style {
+func newStyle(n *Node) *style {
 	return &style{
-		node: n,
+		Node: n,
 	}
 }
 
@@ -794,7 +798,7 @@ func (s *style) getStyle(jsName string) string {
 
 	var cssName = styleMap[jsName]
 
-	var attr = s.node.getAttribute("style")
+	var attr = s.Node.GetAttribute("style")
 	if attr == "" {
 		return ""
 	}
@@ -810,86 +814,88 @@ func (s *style) getStyle(jsName string) string {
 	return ""
 }
 
-func (s *style) setStyle(jsName, styleValue string) {
+/*
+	 func (s *style) setStyle(jsName, styleValue string) {
 
-	var cssName = styleMap[jsName]
+		var cssName = styleMap[jsName]
 
-	var value = s.node.getAttribute("style")
-	var index = 0
-	for index >= 0 {
-		var next = indexOfFrom(value, ";", index)
-		var length = next - index - 1
-		var style string
-		if length > 0 {
-			style = substring(value, index, length)
-		} else {
-			style = substring(value, index, len(style))
-		}
-		substr := substring(style, 0, strings.IndexRune(style, ':'))
-		if strings.TrimSpace(substr) == cssName {
-			value = strings.TrimSpace(substring(value, 0, index))
-			if next >= 0 {
-				value += " " + strings.TrimSpace(substring(value, next, len((value))))
+		var value = s.node.getAttribute("style")
+		var index = 0
+		for index >= 0 {
+			var next = indexOfFrom(value, ";", index)
+			var length = next - index - 1
+			var style string
+			if length > 0 {
+				style = substring(value, index, length)
+			} else {
+				style = substring(value, index, len(style))
 			}
+			substr := substring(style, 0, strings.IndexRune(style, ':'))
+			if strings.TrimSpace(substr) == cssName {
+				value = strings.TrimSpace(substring(value, 0, index))
+				if next >= 0 {
+					value += " " + strings.TrimSpace(substring(value, next, len((value))))
+				}
+			}
+			index = next
 		}
-		index = next
+		value += " " + cssName + ": " + styleValue + ";"
+		s.node.setAttribute("style", strings.TrimSpace(value))
 	}
-	value += " " + cssName + ": " + styleValue + ";"
-	s.node.setAttribute("style", strings.TrimSpace(value))
+*/
+func (n *Node) GetClassName() string {
+	return n.GetAttribute("class")
 }
 
-func (n *node) getClassName() string {
-	return n.getAttribute("class")
+func (n *Node) SetClassName(str string) {
+	n.SetAttribute("class", str)
 }
 
-func (n *node) setClassName(str string) {
-	n.setAttribute("class", str)
+func (n *Node) GetId() string {
+	return n.GetAttribute("id")
 }
 
-func (n *node) getId() string {
-	return n.getAttribute("id")
+func (n *Node) SetId(str string) {
+	n.SetAttribute("id", str)
 }
 
-func (n *node) setId(str string) {
-	n.setAttribute("id", str)
-}
-
-func (n *node) getHref() string {
+/* func (n *node) getHref() string {
 	return n.getAttribute("href")
 }
 
 func (n *node) setHref(str string) {
 	n.setAttribute("href", str)
+} */
+
+func (n *Node) GetSrc() string {
+	return n.GetAttribute("src")
 }
 
-func (n *node) getSrc() string {
-	return n.getAttribute("src")
-}
-
-func (n *node) setSrc(str string) {
+/* func (n *node) setSrc(str string) {
 	n.setAttribute("src", str)
+} */
+
+func (n *Node) GetSrcset() string {
+	return n.GetAttribute("srcset")
 }
 
-func (n *node) getSrcset() string {
-	return n.getAttribute("srcset")
-}
-
-func (n *node) setSrcset(str string) {
-	n.setAttribute("srcset", str)
-}
-
-func (n *node) getNodeName() string {
+/*
+	 func (n *node) setSrcset(str string) {
+		n.setAttribute("srcset", str)
+	}
+*/
+func (n *Node) GetNodeName() string {
 	return n.TagName
 }
 
-func (n *node) getInnerHTML() string {
+func (n *Node) GetInnerHTML() string {
 
 	if n.NodeType == textNode {
 		return n.getInnerHTMLFromTextNode()
 	}
 
-	var getHTML func(from *node, a []string) []string
-	getHTML = func(from *node, a []string) []string {
+	var getHTML func(from *Node, a []string) []string
+	getHTML = func(from *Node, a []string) []string {
 		for i := 0; i < len(from.ChildNodes); i++ {
 			var child = from.ChildNodes[i]
 			if child.LocalName != "" {
@@ -918,7 +924,7 @@ func (n *node) getInnerHTML() string {
 				}
 			} else {
 				// This is a text node, so asking for innerHTML won't recurse.
-				a = append(a, child.getInnerHTML())
+				a = append(a, child.GetInnerHTML())
 			}
 		}
 		return a
@@ -929,7 +935,7 @@ func (n *node) getInnerHTML() string {
 	return strings.Join(arr, "")
 }
 
-func (n *node) setInnerHTML(html string) {
+func (n *Node) SetInnerHTML(html string) {
 
 	if n.NodeType == textNode {
 		n.setInnerHTMLFromTextNode(html)
@@ -949,7 +955,7 @@ func (n *node) setInnerHTML(html string) {
 	}
 }
 
-func (n *node) setTextContent(text string) {
+func (n *Node) SetTextContent(text string) {
 
 	if n.NodeType == textNode {
 		n.setTextContentFromTextNode(text)
@@ -961,8 +967,8 @@ func (n *node) setTextContent(text string) {
 		}
 
 		var t = newText()
-		n.ChildNodes = []*node{t}
-		n.Children = []*node{}
+		n.ChildNodes = []*Node{t}
+		n.Children = []*Node{}
 		t.textContent = text
 		t.ParentNode = n
 	} else {
@@ -971,18 +977,18 @@ func (n *node) setTextContent(text string) {
 
 }
 
-func (n *node) getTextContent() string {
+func (n *Node) GetTextContent() string {
 
 	if n.NodeType == textNode {
 		return n.getTextContentFromTextNode()
 	} else if n.NodeType == elementNode {
-		var getText func(*node, []string) []string
-		getText = func(from *node, t []string) []string {
+		var getText func(*Node, []string) []string
+		getText = func(from *Node, t []string) []string {
 			var nodes = from.ChildNodes
 			for i := 0; i < len(nodes); i++ {
 				var child = nodes[i]
 				if child.NodeType == textNode {
-					t = append(t, child.getTextContent())
+					t = append(t, child.GetTextContent())
 				} else {
 					t = getText(child, t)
 				}
@@ -1001,8 +1007,7 @@ func (n *node) getTextContent() string {
 type domParser struct {
 	html    string
 	z       *html.Tokenizer
-	doc     *node
-	logger  *slog.Logger
+	doc     *Node
 	options *Options
 }
 
@@ -1014,71 +1019,14 @@ func newDOMParser(opts ...Option) *domParser {
 	for _, opt := range opts {
 		opt(p.options)
 	}
-
-	p.logger = loggerWith(p.options.logLevel)
 	return p
-}
-
-// Called when parsing a node. This finds the next name/value attribute
-// pair and adds the result to the attributes list.
-func (p *domParser) readAttributes(n *node, raw []byte) {
-
-	tagIdx := bytes.IndexAny(raw, n.LocalName)
-	chars := raw[tagIdx+len(n.LocalName):]
-
-	for i := 0; i < len(chars); i++ {
-		c := chars[i]
-		if c == '/' || c == '>' {
-			break
-		}
-		if slices.Contains(whitespaces, rune(c)) {
-			continue
-		}
-
-		// Read until a '=' character is hit; this will be the attribute key
-		idx := bytes.IndexAny(chars[i:], "=")
-		if idx == -1 {
-			// No attributes
-			break
-		}
-		equalsSign := idx + i
-
-		key := string(chars[i:equalsSign])
-		if key == "" {
-			break
-		}
-
-		// After a '=', we should see a '"' for the attribute value
-		i += len(key) + 1
-		c = chars[i]
-		if c != '"' && c != '\'' {
-			p.logger.Error("Error reading attribute " + key + ", expecting '\"'")
-			break
-		}
-		// Read the attribute val (and consume the matching quote)
-		i++
-		idx2 := bytes.IndexByte(chars[i:], c)
-		if idx2 == -1 {
-			// No quote
-			break
-		}
-		closingQuote := idx2 + i
-		val := chars[i:closingQuote]
-		decoded, err := decodeHTML(string(val))
-		if err != nil {
-			p.logger.Error(err.Error())
-		} else {
-			n.Attributes = append(n.Attributes, newAttribute(key, decoded))
-		}
-		i += len(val) + 1
-	}
 }
 
 // Parses and returns an Element node. This is called after a '<' has been
 // read.
 // Returns an array; the first index of the array is the parsed node;
 // the second index is a boolean indicating whether this is a void Element
-func (p *domParser) makeElementNode() *node {
+func (p *domParser) makeElementNode() *Node {
 
 	token := p.z.Token()
 
@@ -1090,7 +1038,7 @@ func (p *domParser) makeElementNode() *node {
 	var node = newElement(tag)
 
 	for _, a := range token.Attr {
-		node.setAttribute(a.Key, a.Val)
+		node.SetAttribute(a.Key, a.Val)
 	}
 
 	return node
@@ -1098,7 +1046,7 @@ func (p *domParser) makeElementNode() *node {
 
 // Reads the next child node from the input. If we're reading a closing
 // tag, or if we've reached the end of input, return null. Returns the node
-func (p *domParser) readNode(n *node) {
+func (p *domParser) readNode(n *Node) {
 loop:
 	for {
 
@@ -1109,7 +1057,7 @@ loop:
 			break loop
 
 		case html.DoctypeToken:
-			n.appendChild(&node{
+			n.AppendChild(&Node{
 				nodeName: "#documentType",
 				NodeType: documentTypeNode,
 			})
@@ -1123,21 +1071,20 @@ loop:
 
 				data := p.z.Raw()
 				c, _ := utf8.DecodeRune(data)
-				if c != '<' {
-					textNode.setInnerHTML(string(data))
-					n.appendChild(textNode)
-				}
-
 				txt := string(data)
-				if strings.HasPrefix(txt, "![CDATA[") {
-					textNode = newText()
 
-					s := strings.Index(txt, "![CDATA[")
+				if c != '<' {
+					textNode.SetInnerHTML(txt)
+					n.AppendChild(textNode)
+				} else if strings.HasPrefix(txt, "<![CDATA[") {
+					s := strings.Index(txt, "<![CDATA[")
 					e := strings.Index(txt, "]]>")
 					if s != -1 && e != -1 {
-						textNode.setTextContent(txt[s:e])
-						n.appendChild(textNode)
+						textNode.SetTextContent(txt[s+len("<![CDATA[") : e])
+						n.AppendChild(textNode)
 					}
+				} else {
+					slog.Debug("unhandled text", slog.String("txt", txt))
 				}
 			}
 
@@ -1145,21 +1092,24 @@ loop:
 			{
 				node := p.makeElementNode()
 				if node == nil {
-					p.logger.Debug("cannot create element node")
+					slog.Debug("cannot create element node")
 					break loop
 				}
 
 				// If this isn't a void Element, read its child nodes
+				var localName = node.LocalName
 				if tt == html.StartTagToken {
+					if slices.Contains([]string{"script", "noscript"}, localName) {
+						p.z.NextIsNotRawText()
+					}
 					p.readNode(node)
 				}
 
 				// Only use the first title, because SVG might have other
 				// title elements which we don't care about (medium.com
 				// does this, at least).
-				var localName = node.LocalName
 				if localName == "title" && p.doc.title == "" {
-					p.doc.title = strings.TrimSpace(node.getTextContent())
+					p.doc.title = strings.TrimSpace(node.GetTextContent())
 				} else if localName == "head" {
 					p.doc.head = node
 				} else if localName == "body" {
@@ -1168,7 +1118,7 @@ loop:
 					p.doc.DocumentElement = node
 				}
 
-				n.appendChild(node)
+				n.AppendChild(node)
 			}
 
 		case html.EndTagToken:
@@ -1180,10 +1130,11 @@ loop:
 }
 
 // Parses an HTML string and returns a JS implementation of the Document.
-func (p *domParser) parse(htmlSrc, url string) *node {
+func (p *domParser) parse(htmlSrc, url string) *Node {
 	p.html = htmlSrc
 	p.z = html.NewTokenizer(strings.NewReader(htmlSrc))
 	p.doc = newDocument(url)
+	p.z.AllowCDATA(true)
 	p.readNode(p.doc)
 
 	// If this is an HTML document, remove root-level children except for the
@@ -1193,7 +1144,9 @@ func (p *domParser) parse(htmlSrc, url string) *node {
 		for i >= 0 {
 			var child = p.doc.ChildNodes[i]
 			if child != p.doc.DocumentElement {
-				p.doc.removeChild(child)
+				if _, err := p.doc.RemoveChild(child); err != nil {
+					slog.Error("cannot remove child", slog.String("err", err.Error()))
+				}
 			}
 			i--
 		}

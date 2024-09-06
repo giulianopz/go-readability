@@ -59,18 +59,18 @@ func TestJSDOM_Functionality(t *testing.T) {
 		assert.Equal(t, 1, len(baseDoc.ChildNodes))
 		assert.Equal(t, 10, len(baseDoc.getElementsByTagName("*")))
 
-		var foo = baseDoc.getElementById("foo")
+		var foo = baseDoc.GetElementById("foo")
 		assert.Equal(t, "body", foo.ParentNode.LocalName)
 		assert.Equal(t, baseDoc.Body, foo.ParentNode)
 		assert.Equal(t, baseDoc.Body.ParentNode, baseDoc.DocumentElement)
 		assert.Equal(t, 3, len(baseDoc.Body.ChildNodes))
 
-		var generatedHTML = baseDoc.getElementsByTagName("p")[0].getInnerHTML()
+		var generatedHTML = baseDoc.getElementsByTagName("p")[0].GetInnerHTML()
 		assert.Equal(t, `Some text and <a class="someclass" href="#">a link</a>`, generatedHTML)
 		var scriptNode = baseDoc.getElementsByTagName("script")[0]
-		generatedHTML = scriptNode.getInnerHTML()
+		generatedHTML = scriptNode.GetInnerHTML()
 		assert.Equal(t, `With &lt; fancy " characters in it because`, generatedHTML)
-		assert.Equal(t, `With < fancy " characters in it because`, scriptNode.getTextContent())
+		assert.Equal(t, `With < fancy " characters in it because`, scriptNode.GetTextContent())
 	})
 
 	t.Run("should have basic URI information", func(t *testing.T) {
@@ -84,13 +84,13 @@ func TestJSDOM_Functionality(t *testing.T) {
 		baseDoc := newDOMParser().parse(baseTestCase, "http://fakehost/")
 		var scripts = baseDoc.getElementsByTagName("script")
 		assert.Equal(t, 1, len(scripts))
-		assert.Equal(t, "With < fancy \" characters in it because", scripts[0].getTextContent())
+		assert.Equal(t, "With < fancy \" characters in it because", scripts[0].GetTextContent())
 	})
 
 	t.Run("should have working sibling/first+lastChild properties", func(t *testing.T) {
 		baseDoc := newDOMParser().parse(baseTestCase, "http://fakehost/")
 
-		var foo = baseDoc.getElementById("foo")
+		var foo = baseDoc.GetElementById("foo")
 		assert.Equal(t, foo.PreviousSibling.NextSibling, foo)
 		assert.Equal(t, foo.NextSibling.PreviousSibling, foo)
 		assert.Equal(t, foo.NextSibling, foo.NextElementSibling)
@@ -99,18 +99,18 @@ func TestJSDOM_Functionality(t *testing.T) {
 		var beforeFoo = foo.PreviousSibling
 		var afterFoo = foo.NextSibling
 
-		assert.Equal(t, baseDoc.Body.lastChild(), afterFoo)
-		assert.Equal(t, baseDoc.Body.firstChild(), beforeFoo)
+		assert.Equal(t, baseDoc.Body.LastChild(), afterFoo)
+		assert.Equal(t, baseDoc.Body.FirstChild(), beforeFoo)
 	})
 
 	t.Run("should have working removeChild and appendChild functionality", func(t *testing.T) {
 		baseDoc := newDOMParser().parse(baseTestCase, "http://fakehost/")
 
-		var foo = baseDoc.getElementById("foo")
+		var foo = baseDoc.GetElementById("foo")
 		var beforeFoo = foo.PreviousSibling
 		var afterFoo = foo.NextSibling
 
-		var removedFoo, err = foo.ParentNode.removeChild(foo)
+		var removedFoo, err = foo.ParentNode.RemoveChild(foo)
 		assert.NoError(t, err)
 		assert.Equal(t, foo, removedFoo)
 		assert.Nil(t, foo.ParentNode)
@@ -127,7 +127,7 @@ func TestJSDOM_Functionality(t *testing.T) {
 
 		assert.Equal(t, 2, len(baseDoc.Body.ChildNodes))
 
-		baseDoc.Body.appendChild(foo)
+		baseDoc.Body.AppendChild(foo)
 
 		assert.Equal(t, 3, len(baseDoc.Body.ChildNodes))
 		assert.Equal(t, afterFoo.NextSibling, foo)
@@ -136,7 +136,7 @@ func TestJSDOM_Functionality(t *testing.T) {
 		assert.Equal(t, foo.PreviousElementSibling, afterFoo)
 
 		// This should reorder back to sanity:
-		baseDoc.Body.appendChild(afterFoo)
+		baseDoc.Body.AppendChild(afterFoo)
 		assert.Equal(t, foo.PreviousSibling, beforeFoo)
 		assert.Equal(t, foo.NextSibling, afterFoo)
 		assert.Equal(t, foo.PreviousElementSibling, beforeFoo)
@@ -152,18 +152,18 @@ func TestJSDOM_Functionality(t *testing.T) {
 		baseDoc := newDOMParser().parse(baseTestCase, "http://fakehost/")
 
 		var link = baseDoc.getElementsByTagName("a")[0]
-		assert.Equal(t, "#", link.getAttribute("href"))
-		assert.Equal(t, link.getClassName(), link.getAttribute("class"))
-		var foo = baseDoc.getElementById("foo")
-		assert.Equal(t, foo.getAttribute("id"), foo.getId())
+		assert.Equal(t, "#", link.GetAttribute("href"))
+		assert.Equal(t, link.GetClassName(), link.GetAttribute("class"))
+		var foo = baseDoc.GetElementById("foo")
+		assert.Equal(t, foo.GetAttribute("id"), foo.GetId())
 	})
 
 	t.Run("should have a working replaceChild", func(t *testing.T) {
 		baseDoc := newDOMParser().parse(baseTestCase, "http://fakehost/")
 
 		var parent = baseDoc.getElementsByTagName("div")[0]
-		var p = baseDoc.createElement("p")
-		p.setAttribute("id", "my-replaced-kid")
+		var p = baseDoc.createElementNode("p")
+		p.SetAttribute("id", "my-replaced-kid")
 		var childCount = len(parent.ChildNodes)
 		var childElCount = len(parent.Children)
 
@@ -176,7 +176,7 @@ func TestJSDOM_Functionality(t *testing.T) {
 			var oldPrev = replacedNode.PreviousSibling
 			var oldPrevEl = replacedNode.PreviousElementSibling
 
-			parent.replaceChild(p, replacedNode)
+			parent.ReplaceChild(p, replacedNode)
 
 			// Check siblings and parents on both nodes were set:
 			assert.Equal(t, p.NextSibling, oldNext)
@@ -205,7 +205,7 @@ func TestJSDOM_Functionality(t *testing.T) {
 			assert.Equal(t, parent.ChildNodes[i], p)
 
 			// Now check element properties/lists:
-			var kidElementIndex = slices.IndexFunc(parent.Children, func(n *node) bool {
+			var kidElementIndex = slices.IndexFunc(parent.Children, func(n *Node) bool {
 				return n == p
 			})
 
@@ -238,7 +238,7 @@ func TestJSDOM_Functionality(t *testing.T) {
 				assert.Equal(t, childElCount+1, len(parent.Children))
 			}
 
-			parent.replaceChild(replacedNode, p)
+			parent.ReplaceChild(replacedNode, p)
 
 			assert.Equal(t, oldNext, replacedNode.NextSibling)
 			assert.Equal(t, oldNextEl, replacedNode.NextElementSibling)
@@ -266,18 +266,18 @@ func TestHTML_Escaping(t *testing.T) {
 	var baseStr = "<p>Hello, everyone &amp; all their friends, &lt;this&gt; is a &quot; test with &apos; quotes.</p>"
 	var doc = newDOMParser().parse(baseStr, "")
 	var p = doc.getElementsByTagName("p")[0]
-	var txtNode = p.firstChild()
+	var txtNode = p.FirstChild()
 
 	t.Run("should handle encoding HTML correctly", func(t *testing.T) {
 		// This /should/ just be cached straight from reading it:
-		assert.Equal(t, baseStr, "<p>"+p.getInnerHTML()+"</p>")
-		assert.Equal(t, baseStr, "<p>"+txtNode.getInnerHTML()+"</p>")
+		assert.Equal(t, baseStr, "<p>"+p.GetInnerHTML()+"</p>")
+		assert.Equal(t, baseStr, "<p>"+txtNode.GetInnerHTML()+"</p>")
 	})
 
 	t.Run("should have decoded correctly", func(t *testing.T) {
 		// This /should/ just be cached straight from reading it:
-		assert.Equal(t, "Hello, everyone & all their friends, <this> is a \" test with ' quotes.", p.getTextContent())
-		assert.Equal(t, "Hello, everyone & all their friends, <this> is a \" test with ' quotes.", txtNode.getTextContent())
+		assert.Equal(t, "Hello, everyone & all their friends, <this> is a \" test with ' quotes.", p.GetTextContent())
+		assert.Equal(t, "Hello, everyone & all their friends, <this> is a \" test with ' quotes.", txtNode.GetTextContent())
 
 	})
 
@@ -285,11 +285,11 @@ func TestHTML_Escaping(t *testing.T) {
 		// Because the initial tests might be based on cached innerHTML values,
 		// let's manipulate via textContent in order to test that it alters
 		// the innerHTML correctly.
-		txtNode.setTextContent(txtNode.getTextContent() + " ")
-		txtNode.setTextContent(strings.TrimSpace(txtNode.getTextContent()))
+		txtNode.SetTextContent(txtNode.GetTextContent() + " ")
+		txtNode.SetTextContent(strings.TrimSpace(txtNode.GetTextContent()))
 		var expectedHTML = strings.NewReplacer(`&quot;`, `"`, `&apos;`, `'`).Replace(baseStr)
-		assert.Equal(t, expectedHTML, "<p>"+txtNode.getInnerHTML()+"</p>")
-		assert.Equal(t, expectedHTML, "<p>"+p.getInnerHTML()+"</p>")
+		assert.Equal(t, expectedHTML, "<p>"+txtNode.GetInnerHTML()+"</p>")
+		assert.Equal(t, expectedHTML, "<p>"+p.GetInnerHTML()+"</p>")
 	})
 }
 
@@ -298,46 +298,46 @@ func TestScript_Parsing(t *testing.T) {
 	t.Run("should strip ?-based comments within script tags", func(t *testing.T) {
 		var html = `<script><?Silly test <img src="test"></script>`
 		var doc = newDOMParser().parse(html, "")
-		assert.Equal(t, "SCRIPT", doc.firstChild().TagName)
-		assert.Equal(t, "", doc.firstChild().getTextContent())
-		assert.Equal(t, 0, len(doc.firstChild().Children))
-		assert.Equal(t, 0, len(doc.firstChild().ChildNodes))
+		assert.Equal(t, "SCRIPT", doc.FirstChild().TagName)
+		assert.Equal(t, "", doc.FirstChild().GetTextContent())
+		assert.Equal(t, 0, len(doc.FirstChild().Children))
+		assert.Equal(t, 0, len(doc.FirstChild().ChildNodes))
 	})
 
 	t.Run("should strip !-based comments within script tags", func(t *testing.T) {
 		var html = `<script><!--Silly test > <script src="foo.js"></script>--></script>`
 		var doc = newDOMParser().parse(html, "")
-		assert.Equal(t, "SCRIPT", doc.firstChild().TagName)
-		assert.Equal(t, "", doc.firstChild().getTextContent())
-		assert.Equal(t, 0, len(doc.firstChild().Children))
-		assert.Equal(t, 0, len(doc.firstChild().ChildNodes))
+		assert.Equal(t, "SCRIPT", doc.FirstChild().TagName)
+		assert.Equal(t, "", doc.FirstChild().GetTextContent())
+		assert.Equal(t, 0, len(doc.FirstChild().Children))
+		assert.Equal(t, 0, len(doc.FirstChild().ChildNodes))
 	})
 
 	t.Run("should strip any other nodes within script tags", func(t *testing.T) {
 		var html = `<script>&lt;div>Hello, I'm not really in a &lt;/div></script>`
 		var doc = newDOMParser().parse(html, "")
-		assert.Equal(t, "SCRIPT", doc.firstChild().TagName)
-		assert.Equal(t, `<div>Hello, I'm not really in a </div>`, doc.firstChild().getTextContent())
-		assert.Equal(t, 0, len(doc.firstChild().Children))
-		assert.Equal(t, 1, len(doc.firstChild().ChildNodes))
+		assert.Equal(t, "SCRIPT", doc.FirstChild().TagName)
+		assert.Equal(t, `<div>Hello, I'm not really in a </div>`, doc.FirstChild().GetTextContent())
+		assert.Equal(t, 0, len(doc.FirstChild().Children))
+		assert.Equal(t, 1, len(doc.FirstChild().ChildNodes))
 	})
 
 	t.Run("should strip any other invalid script nodes within script tags", func(t *testing.T) {
 		var html = `<script>&lt;script src="foo.js">&lt;/script></script>`
 		var doc = newDOMParser().parse(html, "")
-		assert.Equal(t, "SCRIPT", doc.firstChild().TagName)
-		assert.Equal(t, "<script src=\"foo.js\"></script>", doc.firstChild().getTextContent())
-		assert.Equal(t, 0, len(doc.firstChild().Children))
-		assert.Equal(t, 1, len(doc.firstChild().ChildNodes))
+		assert.Equal(t, "SCRIPT", doc.FirstChild().TagName)
+		assert.Equal(t, "<script src=\"foo.js\"></script>", doc.FirstChild().GetTextContent())
+		assert.Equal(t, 0, len(doc.FirstChild().Children))
+		assert.Equal(t, 1, len(doc.FirstChild().ChildNodes))
 	})
 
 	t.Run("should not be confused by partial closing tags", func(t *testing.T) {
 		var html = "<script>var x = '&lt;script>Hi&lt;' + '/script>';</script>"
 		var doc = newDOMParser().parse(html, "")
-		assert.Equal(t, "SCRIPT", doc.firstChild().TagName)
-		assert.Equal(t, "var x = '<script>Hi<' + '/script>';", doc.firstChild().getTextContent())
-		assert.Equal(t, 0, len(doc.firstChild().Children))
-		assert.Equal(t, 1, len(doc.firstChild().ChildNodes))
+		assert.Equal(t, "SCRIPT", doc.FirstChild().TagName)
+		assert.Equal(t, "var x = '<script>Hi<' + '/script>';", doc.FirstChild().GetTextContent())
+		assert.Equal(t, 0, len(doc.FirstChild().Children))
+		assert.Equal(t, 1, len(doc.FirstChild().ChildNodes))
 	})
 }
 
@@ -345,12 +345,12 @@ func TestTagName_LocalName_Handling(t *testing.T) {
 	t.Run("should lowercase tag names", func(t *testing.T) {
 		var html = "<DIV><svG><clippath/></svG></DIV>"
 		var doc = newDOMParser().parse(html, "")
-		assert.Equal(t, "DIV", doc.firstChild().TagName)
-		assert.Equal(t, "div", doc.firstChild().LocalName)
-		assert.Equal(t, "SVG", doc.firstChild().firstChild().TagName)
-		assert.Equal(t, "svg", doc.firstChild().firstChild().LocalName)
-		assert.Equal(t, "CLIPPATH", doc.firstChild().firstChild().firstChild().TagName)
-		assert.Equal(t, "clippath", doc.firstChild().firstChild().firstChild().LocalName)
+		assert.Equal(t, "DIV", doc.FirstChild().TagName)
+		assert.Equal(t, "div", doc.FirstChild().LocalName)
+		assert.Equal(t, "SVG", doc.FirstChild().FirstChild().TagName)
+		assert.Equal(t, "svg", doc.FirstChild().FirstChild().LocalName)
+		assert.Equal(t, "CLIPPATH", doc.FirstChild().FirstChild().FirstChild().TagName)
+		assert.Equal(t, "clippath", doc.FirstChild().FirstChild().FirstChild().LocalName)
 	})
 }
 
@@ -358,11 +358,11 @@ func TestRecovery_From_SelfClosing_Tags_That_Have_Close_Tags(t *testing.T) {
 	t.Run("should handle delayed closing of a tag", func(t *testing.T) {
 		var html = "<div><input><p>I'm in an input</p></input></div>"
 		var doc = newDOMParser().parse(html, "")
-		assert.Equal(t, "div", doc.firstChild().LocalName)
-		assert.Equal(t, 1, len(doc.firstChild().ChildNodes))
-		assert.Equal(t, "input", doc.firstChild().firstChild().LocalName)
-		assert.Equal(t, 1, len(doc.firstChild().firstChild().ChildNodes))
-		assert.Equal(t, "p", doc.firstChild().firstChild().firstChild().LocalName)
+		assert.Equal(t, "div", doc.FirstChild().LocalName)
+		assert.Equal(t, 1, len(doc.FirstChild().ChildNodes))
+		assert.Equal(t, "input", doc.FirstChild().FirstChild().LocalName)
+		assert.Equal(t, 1, len(doc.FirstChild().FirstChild().ChildNodes))
+		assert.Equal(t, "p", doc.FirstChild().FirstChild().FirstChild().LocalName)
 	})
 }
 
@@ -392,11 +392,11 @@ func TestNamespace_Workarounds(t *testing.T) {
 
 		assert.Equal(t, "DIV", div.TagName)
 		assert.Equal(t, "div", div.LocalName)
-		assert.Equal(t, "SVG", div.firstChild().TagName)
-		assert.Equal(t, "svg", div.firstChild().LocalName)
-		assert.Equal(t, "CLIPPATH", div.firstChild().firstChild().TagName)
-		assert.Equal(t, "clippath", div.firstChild().firstChild().LocalName)
-		assert.Equal(t, doc.firstChild(), doc.DocumentElement)
-		assert.Equal(t, doc.DocumentElement.firstChild(), doc.Body)
+		assert.Equal(t, "SVG", div.FirstChild().TagName)
+		assert.Equal(t, "svg", div.FirstChild().LocalName)
+		assert.Equal(t, "CLIPPATH", div.FirstChild().FirstChild().TagName)
+		assert.Equal(t, "clippath", div.FirstChild().FirstChild().LocalName)
+		assert.Equal(t, doc.FirstChild(), doc.DocumentElement)
+		assert.Equal(t, doc.DocumentElement.FirstChild(), doc.Body)
 	})
 }
