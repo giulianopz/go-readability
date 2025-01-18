@@ -913,7 +913,7 @@ func (n *Node) GetInnerHTML() string {
 					a = append(a, " "+attr.name+"="+quote+val+quote)
 				}
 
-				if _, found := voidElems[child.LocalName]; found && len(child.ChildNodes) != 0 {
+				if _, found := voidElems[child.LocalName]; found && len(child.ChildNodes) == 0 {
 					// if this is a self-closing element, end it here
 					a = append(a, "/>")
 				} else {
